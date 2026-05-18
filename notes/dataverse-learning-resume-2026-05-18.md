@@ -11,6 +11,288 @@
 
 ---
 
+# 第3部 実装パターン
+
+## 17. アーキテクチャ候補の網羅
+
+### ふんわり入口
+
+Dataverseを使う画面を作る方法は一つではない。入口だけ見ても、Power Apps、Model-driven Apps、Power Pages、Teams、SharePoint、Excel、React、モバイル、Power BI、RPA、iPaaSまである。
+
+ここで大事なのは、「作れるか」ではなく「本番で通るか」である。自分のPCで動く、Developer環境で動く、管理者権限で動く、はまだ入口でしかない。本番では、DLP、Entra ID権限、環境ロール、端末制御、ネットワーク、監査、ライセンス、所有者、変更管理が待っている。
+
+アーキテクチャ選定は、料理のメニュー選びではなく、会社の稟議を通す配送経路選びに近い。速そうに見える道でも、会社の門で止められるなら本番には使えない。
+
+### 正確に言うと
+
+元資料の改訂版では、Dataverseをバックエンドにしたフロントエンド/連携アーキテクチャをA1からF1まで34本に分類している。大分類は次の通り。
+
+| 分類 | 名前 | 方向性 |
+|---|---|---|
+| A | Power Platform純正系 | Power Apps、Power Pages、PCF、Code Appsなど |
+| B | Office / M365製品をフロント化する系 | Excel、Office Add-ins、SPFx、Outlookなど |
+| C | ファイル / マクロ / レガシークライアント系 | VBA、Accessなど |
+| D | 独自Webアプリ / デスクトップ / モバイル系 | SPA、BFF、Teams Tab、Azure App Serviceなど |
+| E | 仲介・ノーコード・データ連携系 | SharePoint連携、Power Automate Desktop、Virtual Tablesなど |
+| F | Dataverseバックエンド補助系 | Custom API、Plug-in、Webhookなど |
+
+### ショートリスト5本
+
+厳しめの会社PC本番環境では、最初から34本を同列に比較しない。まずは次の5本を本命候補として見る。
+
+| 優先 | 候補 | 向いている条件 | 選定根拠 | 注意点 |
+|---|---|---|---|---|
+| 1 | A2 Model-driven Apps | Dataverse中心のCRUD、権限、監査、フォーム重視 | DataverseのSecurity Role、View、Form、Solutionに素直に乗る | UI自由度は低い。複雑UXはCustom Page/PCF併用 |
+| 2 | A1 Canvas Apps | 画面を早く作りたい、小から中規模入力 | Power Apps管理下でDLP、共有、ライセンスを説明しやすい | 委任、性能、複雑式、接続参照、利用者ライセンス |
+| 3 | D5/D8 BFF/API中間層 + Dataverse | 独自UI必須、認証/監査/レート制御を中央集約 | SPA直結より情シス説明がしやすい | Azure/ホスティング承認、アプリ登録、運用責任、追加コスト |
+| 4 | D6 Teams Tab App + Dataverse | Teamsが標準入口 | 既存M365導線に乗せやすい | Teamsカスタムアプリ許可、Manifest、SSO、ホスティング |
+| 5 | B4 SPFx Webパーツ + Dataverse/BFF | SharePointポータルが業務入口 | 社内ポータルに自然に置ける | App Catalog、API permission、CSP、変更管理 |
+
+Model-driven AppsとCanvas Appsは、Power Platform内で完結しやすく、Dataverseの権限とALMに乗せやすい。独自UIが必要なら、ブラウザからDataverse Web APIへ直結するより、BFF/API中間層で認証、監査、制限、ログを集約する構成を先に比較する。
+
+### ロングリスト全34本
+
+| ID | アーキテクチャ | 認証/実行文脈 | 本番で詰まりやすいポイント | 通過感 |
+|---|---|---|---|---|
+| A1 | Canvas Apps + Dataverse | 委任認証。各ユーザーのDataverse権限 | DLP混在、委任制限、性能、テーブル権限不足、接続参照 | 高 |
+| A2 | Model-driven Apps | 委任認証。Security Roleでアプリ/データ制御 | Form/View/Sitemap権限、BU境界、列セキュリティ、BPF | 高 |
+| A3 | Power Pages | Power Pages認証、Entra ID/B2C/外部ID等 | 外部公開審査、Table Permissions漏れ、容量課金、匿名アクセス | 中 |
+| A4 | Custom Pages + PCF | Power Apps文脈。PCFはホスト文脈 | PCF審査、npm/pac不可、Solution checker、CSP/CORS | 中 |
+| A5 | Power Apps Code Apps | Entra ID、Power Platform管理下 | 機能成熟度、開発ツール制限、環境設定無効化、Premium | 中 |
+| A6 | Model-driven内 Web resources / JS / Command bar / iframe | Model-driven文脈、Xrm.WebApi | unsupported DOM操作、保守性、iframe先CSP、権限検証 | 中から高 |
+| A7 | Power Apps Teams/SharePoint埋め込み、mobile/wrap配布 | 埋め込み先 + Power Apps認証 | Teams/SharePoint埋め込み許可、Intune、wrap、オフライン | 中 |
+| B1 | Excel + Power Query(Dataverseコネクタ) | ExcelのM365サインイン、読み取り中心 | 書き戻し困難、外部接続ブロック、ラベル/IRM、再配布 | 中 |
+| B2 | Office Scripts + Power Automate + Dataverse | Scripts + Flow接続文脈 | 外部fetch制約、OAuth保管不可、Scripts無効化、DLP | 中 |
+| B3 | Office Add-ins + Dataverse/BFF | Office.js + MSAL/SSOまたはBFF | サイドロード禁止、集中配信、ホスティング、SSO同意 | 低から中 |
+| B4 | SPFx Webパーツ + Dataverse/BFF | SharePointログイン + MSAL/BFF | App Catalog、API access承認、CSP、ポータル変更管理 | 中 |
+| B5 | Outlook Add-in / Dynamics 365 App for Outlook | Office.js SSO/MSALまたは標準D365 | Exchange集中配信、メールデータ、監査、アドイン承認 | 低から中 |
+| C1 | Excel VBA + REST | 実装次第。OAuthが難しい | マクロブロック、Defender、Trust Center、トークン保管、監査困難 | 低 |
+| C2 | Excel VBA + Dataverse Web API | デバイスコード/認可コード等 | CA/MFA、トークン保管、アプリ登録不可、監査、保守 | 低 |
+| C3 | Excel + Office Scripts + Power Automate | Flow接続所有者/実行者文脈 | Premium、Run script制限、保存場所、DLP、タイムアウト | 中 |
+| C4 | Microsoft Access + Dataverseリンクテーブル | Office/Access認証、ODBC/OLE DB等 | 端末配布、ドライバ、ローカルキャッシュ、移行性 | 低 |
+| D1 | 独自SPA + Dataverse Web API直結 | SPA登録 + MSAL + delegated | アプリ登録、同意、CA、ホスティング、トークン、API制限 | 低から中 |
+| D2 | デスクトップアプリ + MSAL + Web API | Public client、interactive等 | EXE/MSI禁止、署名、SmartScreen、MFA/CAE、配布 | 低 |
+| D3 | Power BI(フロント代用) + Dataverse | Power BI Connectorの委任認証 | 基本参照中心、書き戻し別、ラベル、DirectQuery性能 | 中から高 |
+| D4 | Dynamics 365標準フォーム流用 | D365/Dataverse標準認証 | D365導入有無、Use Rights、標準改修影響、業務承認 | 中 |
+| D5 | Azure Static Web Apps + Functions/APIM BFF + Dataverse | Entra認証、OBOまたはApplication User | Azure申請、APIM/Functions、Key Vault、監査、Private Endpoint | 中 |
+| D6 | Teams Tab App + Dataverse/BFF | Teams SSO + delegated/OBO/BFF | Teamsアプリポリシー、Manifest、SSO同意、ホスティング | 中 |
+| D7 | Mobile Native + Dataverse/BFF | MSAL mobile、BFF、Intune | 社内アプリ配布、企業署名、BYOD、Intune、端末紛失 | 低 |
+| D8 | Azure App Service / Container Apps server-side .NET + Dataverse SDK | Confidential client、S2SまたはOBO | ホスティング承認、VNet、Secret rotation、SDK差異、監査 | 中 |
+| E1 | SharePoint List連携 → Dataverse同期 | SharePoint/Flow接続所有者文脈 | 二重管理、同期遅延、権限モデル二重化、5000件問題 | 中 |
+| E2 | Microsoft Lists / SharePoint Lists + Power Apps | SharePoint/Power Apps委任認証 | Dataverseではない。複雑関係、監査、委任、後の移行 | 中 |
+| E3 | Dataverse for Teams + Teams内アプリ | Teamsメンバー/所有者モデル | 容量/機能制限、本格Dataverseとの差、本番移行 | 中 |
+| E4 | Power Automate Desktop + UIフロー | 実行端末/実行ユーザー文脈 | RPA監査、端末ロック、無人/有人、資格情報、VDI | 低から中 |
+| E5 | Copilot Studio | Copilot/チャネル認証、Connector権限 | チャットUI限定、生成AI制限、会話ログ、データ越境 | 中 |
+| E6 | Custom Connector / Logic Apps + Dataverse | Custom Connector/OAuth、Managed Identity等 | Custom Connector禁止、HTTP DLP、Azure統制、接続所有者 | 中 |
+| E7 | Virtual Tables | Dataverse認証 + 外部接続認証 | 性能、外部依存、書き込み制限、検索/集計制約 | 中 |
+| E8 | Synapse Link / Fabric / Dataflows / Power BI分析基盤 | サービス間連携、分析中心 | 参照専用、遅延、データ複製、所在地、Purview、コスト | 中 |
+| E9 | Microsoft Loop + Power Automate/Dataverse連携 | Loop/M365 + Flow接続文脈 | Loopガバナンス、共有範囲、監査、DLP、配布モデル | 低から中 |
+| E10 | OutSystems / Mendix等 iPaaS・ローコード基盤 + Dataverse | 製品ごとのSSO/Connector | 二重ライセンス、外部SaaS DLP、ベンダーロックイン | 低から中 |
+| F1 | Custom API / Plug-in / Webhookによるバックエンド分離 | Dataverse内実行。呼び出し元文脈 | Sandbox 2分、外部通信制限、デプロイ審査、Trace肥大化 | 中 |
+
+### VBA的にいうと
+
+VBA経験者は、C1やC2を見て「Excelから直接Dataverseを叩けばよいのでは」と考えやすい。技術的には可能でも、本番ではマクロ制御、MFA、条件付きアクセス、トークン保管、アプリ登録、監査、ライセンスで止まりやすい。
+
+VBA資産を活かすなら、Excelを画面として残しつつ、Dataverse直結ではなくPower AutomateやBFFを経由する構成を比較する。ただし、それでもMultiplexingや接続所有者の問題は消えない。
+
+### 最小プローブ
+
+どの候補でも、最初のPoCは見た目ではなく本番ブロッカーを潰すために作る。
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/WhoAmI HTTP/1.1
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+最低限、次を見る。
+
+| 確認 | 内容 |
+|---|---|
+| 認証 | 誰のIDで実行されるか |
+| 権限 | 一般ユーザーでCRUD、Append、Append Toが通るか |
+| 列保護 | Field Security列がどう返るか |
+| BU | 部署違いの行が見えるか |
+| DLP | 使うConnectorの組み合わせが許可されるか |
+| 429 | Retry-Afterをログに出せるか |
+| ALM | DevからTestへManagedで運べるか |
+| 監査 | 誰の操作として残るか |
+
+### 混同しやすい近接概念
+
+「通過確率が高い」と「最適」は違う。Model-driven Appsは本番説明しやすいが、独自UXが強い要件には合わない場合がある。
+
+「低コード」と「低リスク」も同じではない。Power Automateで簡単に組めても、接続所有者、DLP、ライセンス、孤児化、実行履歴、タイムアウトでリスクが出る。
+
+「独自Webが自由」と「運用も自由」は違う。ホスティング、認証、Secret、監査、脆弱性対応、CI/CD、障害対応を自分たちで持つ必要がある。
+
+### ここを押さえれば次に進める
+
+アーキテクチャ候補は34本あるが、最初の本命はModel-driven、Canvas、BFF/API中間層、Teams Tab、SPFxの5本でよい。比較軸は機能ではなく、ID方式、権限境界、ホスティング、DLP、ALM、監査、性能、ライセンス、運用責任である。
+
+---
+
+## 18. 本番運用ブロッカー
+
+### ふんわり入口
+
+PoCは通ったのに本番で止まる。Power PlatformやDataverseではよくある。
+
+理由は単純で、PoCで見ているのは「技術的に動くか」で、本番審査で見られるのは「会社として許してよいか」だからである。個人のDeveloper環境で動くことと、全社の業務データを扱ってよいことは別問題である。
+
+### 正確に言うと
+
+本番運用でよく止まる横断ブロッカー。
+
+| ブロッカー | 何が起きるか | 先に見ること |
+|---|---|---|
+| DLP | Connector混在で保存や実行がブロックされる | Dataverse、SharePoint、Excel、HTTP、Custom Connector、外部SaaSの分類 |
+| Entra権限 | App Registrationや管理者同意が取れない | アプリ登録権限、同意ワークフロー、API permission |
+| 環境ロール | Maker権限やDataverse権限がない | Environment Maker、System Customizer、Security Role |
+| ネットワーク | Dynamics/Power Platform/Azure/Office CDNへ到達できない | Proxy、TLS inspection、許可ドメイン |
+| デバイス制御 | VS Code、node、npm、pac、dotnet、VBA、EXEが禁止 | 会社PCのソフト制御、Intune、Defender ASR |
+| データガバナンス | 個人情報や機密データの扱いが未承認 | データ分類、DPIA、リテンション、外部共有 |
+| 監査ログ | 誰が何をしたか説明できない | Audit、Power Platform Activity、Unified Audit、App Insights |
+| ライセンス | 利用者、実行者、サービスアカウントに権利がない | Power Apps、Automate、Pages、BI、D365 Use Rights |
+| 容量 | DB/File/Logが足りない | 添付、File/Image、Audit、Trace、AsyncOperationBase |
+| 所有者 | 個人所有のアプリ/フロー/接続が退職で孤児化 | Co-owner、サービスアカウント、運用担当 |
+| ALM | 本番移送、戻し、差分管理がない | Solution、Pipeline、Managed、Rollback |
+| 変更管理 | CABや審査会に間に合わない | 申請周期、RACI、戻し手順、障害時連絡 |
+
+DLPは特に誤解されやすい。Dataverse Connector単体が使えるかだけではない。同じアプリやフロー内で、DataverseとHTTP、SharePoint、Excel Online、外部SaaS、Custom Connectorを混ぜたときに、データポリシー上許されるかを見る。
+
+Entra権限では、独自SPA、Teams Tab、SPFx、Office Add-ins、BFFが止まりやすい。App Registration、Redirect URI、API permission、管理者同意、条件付きアクセスが必要になる。
+
+### VBA的にいうと
+
+VBAでは「マクロが動かない」という一言で片付けがちだが、会社端末では多くの制御がある。
+
+| VBAでの止まり方 | Dataverse/Power Platformでの止まり方 |
+|---|---|
+| マクロが無効 | Power Platform機能がテナントで無効 |
+| ActiveXが禁止 | PCF/Office Add-ins/独自アプリが禁止 |
+| 外部接続が止まる | DLP、Proxy、CORS、条件付きアクセス |
+| ファイル配布できない | Solution import、Teams app配布、App Catalog承認が必要 |
+| 誰の最新版かわからない | ALM、所有者、Pipelineが必要 |
+
+### 最小チェックリスト
+
+```mermaid
+graph TD
+    Start[PoC前] --> Data[データ分類]
+    Data --> Env[利用環境確認]
+    Env --> License[ライセンス確認]
+    License --> DLP[DLP確認]
+    DLP --> Entra[Entra権限/同意]
+    Entra --> Device[端末/ネットワーク]
+    Device --> Probe[最小プローブ]
+    Probe --> ALM[Solution移送]
+    ALM --> Pilot[小規模パイロット]
+```
+
+管理者へ依頼する確認項目は、Power Platform管理者、Entra管理者、M365管理者、Teams/SharePoint管理者、端末/ネットワーク管理者、監査/セキュリティ、ライセンス担当に分かれる。全部を一人に聞くと漏れる。
+
+### コード例
+
+429を記録するだけでも、本番説明では意味がある。
+
+```javascript
+async function callWithLog(url, options) {
+  const response = await fetch(url, options);
+
+  if (response.status === 429) {
+    console.warn("Dataverse throttled", {
+      retryAfter: response.headers.get("Retry-After"),
+      requestId: response.headers.get("x-ms-service-request-id")
+    });
+  }
+
+  return response;
+}
+```
+
+### 混同しやすい近接概念
+
+「管理者が一度OKした」と「全要件がOK」は違う。Power Platform管理者が環境を許可しても、Entra管理者がアプリ登録を許可しない、端末管理者がnpmを許可しない、監査部門がログ不足を指摘する、という分業がある。
+
+「PoC許可」と「本番許可」も違う。Trial環境、個人所有接続、ダミーデータ、外部通信の一時許可は、本番には引き継げないことが多い。
+
+「System Administratorで動いた」と「一般ユーザーで動く」も違う。必ず一般ユーザー、最小権限、BU違い、Field Securityありで検証する。
+
+### ここを押さえれば次に進める
+
+本番ブロッカーは、技術より管理境界で出る。DLP、Entra、環境ロール、ネットワーク、端末制御、データガバナンス、監査、ライセンス、所有者、ALMをPoC前に確認する。画面を作る前に、止まりそうな門を洗い出す。
+
+---
+
+## 19. ライセンスと費用
+
+### ふんわり入口
+
+ライセンスは、入場券と利用券の組み合わせである。
+
+遊園地で考えると、入園券だけでは全アトラクションに乗れないことがある。乗り物ごとのチケット、年間パス、団体契約、特別エリアの追加料金がある。Power Platformも同じで、Microsoft 365を持っているからDataverse本番アプリが全部使える、とはならない。
+
+ライセンスは技術者だけで判断できない。購入ルート、契約、Dynamics 365の文脈、Power Apps/Automateの権利、サービスアカウント、外部ユーザー、Azure費用、容量費用が絡む。
+
+### 正確に言うと
+
+Dataverse/Power Platformで特に注意するライセンス・費用の罠。
+
+| 罠 | 内容 | 何を見るか |
+|---|---|---|
+| Multiplexing | 中間APIや共有アカウントで隠しても、実利用者のライセンスは免除されない | 誰が実質的にDataverseデータを利用するか |
+| Dynamics 365 Use Rights | D365に含まれる権利は該当D365文脈に制限されることがある | カスタム業務アプリがD365権利内か |
+| Power Apps per app vs Premium | アプリ単位かユーザー単位かで費用が変わる | 利用者数、アプリ数、増加見込み |
+| Default環境 | 業務本番に不向き | 本番環境、管理方針、バックアップ、所有者 |
+| Managed Environment | 管理機能によりPremium要件が絡む場合 | 対象環境がManagedか |
+| Premium Connector | Dataverse、HTTP、Custom Connector等の扱い | アプリ/フロー内のConnector |
+| Power Automate文脈 | 自動/スケジュール/HTTP/RPAで権利が変わる | 実行者、所有者、トリガー |
+| サービスアカウント | 接続所有者にもライセンスと管理が必要 | 退職しない所有者、PIM、資格情報 |
+| Dataverse Capacity | DB/File/Logが別枠 | 添付、File/Image、Audit、Trace |
+| Power Pages | authenticated/anonymous capacity、外部ユーザー | アクセス数、匿名、トラフィック |
+| Power BI | Pro/PPU/Capacity、Power Apps visual | 閲覧者、共有先、書き戻し |
+| Azure中間層 | Functions、App Service、APIM、Key Vault、App Insights | Azure課金と運用責任 |
+| Trial/Developer/PoC | 本番へそのまま昇格できない | 再構築、Solution移送、購入リードタイム |
+| AI Builder/Copilot | Credit、メッセージ、地域、データ条件 | 契約と利用条件の変化 |
+
+Multiplexingは特に重要である。BFFやAPI中間層を作って、利用者全員の操作を1つのApplication UserでDataverseへ流したとしても、それだけで利用者ライセンスが不要になるわけではない。実際にPower Apps、Power Automate、Copilot Studio、Dataverseのデータや機能を利用する人が誰かで判断される。
+
+### VBA的にいうと
+
+VBAでは、Excelが入っていればマクロも動く、という感覚になりやすい。Dataverseでは、Microsoft 365 Appsがあること、Power Appsを作れること、Dataverseの本番アプリを実行できること、Power AutomateのPremium Flowを使えること、Power Pages外部ユーザーを扱えることは別である。
+
+「共有アカウントでまとめれば安くなる」という発想は危険である。監査上もライセンス上も説明できない可能性が高い。
+
+### 費用見積もりの考え方
+
+最初から正確な金額を出すより、費用の発生箇所を漏らさないことが大事である。
+
+| 費用領域 | 例 |
+|---|---|
+| 利用者ライセンス | Power Apps Premium/per app、Dynamics 365、Power BI Pro等 |
+| 実行ライセンス | Power Automate Premium、RPA、サービスアカウント |
+| 容量 | Dataverse DB/File/Log、Power Pages capacity |
+| Azure | App Service、Functions、APIM、Storage、Key Vault、App Insights |
+| 運用 | 監視、障害対応、変更管理、保守担当 |
+| 開発環境 | VS Code、CLI利用許可、証明書、開発用環境 |
+| 監査/法務 | DPIA、データ分類、第三者契約レビュー |
+
+### 混同しやすい近接概念
+
+「Microsoft 365に含まれる」と「Dataverse本番利用に足りる」は違う。Dataverse for Teamsや一部標準ConnectorはM365文脈で使える場合があるが、本格Dataverseアプリとは別に考える。
+
+「D365の権利」と「自由なPower Apps権利」も違う。Dynamics 365のUse Rightsは対象アプリ文脈に縛られることがある。別業務のカスタムアプリに流用できるかは必ず確認する。
+
+「Application Userなら安くなる」も危険である。Application Userは技術上の実行主体であり、実利用者のライセンス要否を消す魔法ではない。
+
+### ここを押さえれば次に進める
+
+ライセンスは後回しにしない。アーキテクチャ候補ごとに、利用者、作成者、実行者、接続所有者、外部ユーザー、サービスアカウント、容量、Azure費用を一覧化する。Multiplexing、D365 Use Rights、Default環境、Managed Environment、Premium Connectorは最初に確認する。
+
+---
+
 # 第2部 Microsoftの世界(Dataverse中心)
 
 ## 9. Power Platform全体地図
