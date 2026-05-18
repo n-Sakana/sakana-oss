@@ -824,4 +824,822 @@ graph TD
 
 セキュリティはログインだけで終わらない。入力、API、権限、通信、ブラウザ制御、監査、DLP、端末管理まで含む。Dataverse を使うときも、標準機能に任せられる部分と、自分で守らなければならない部分を切り分けて考える。
 
-<!-- PART2-PLACEHOLDER -->
+---
+
+# 第 2 部 Microsoft の世界(Dataverse 中心)
+
+## 9. Power Platform 全体地図
+
+### ふんわり入口
+
+Power Platform は、業務改善デパートだと思うのが手っ取り早い。フロアごとに役割が違う。
+
+- 画面を作るフロア
+- 自動処理を作るフロア
+- グラフや分析を作るフロア
+- 外部向け Web サイトを作るフロア
+- チャットボットを作るフロア
+- どのフロアも共通で使う倉庫
+
+この共通倉庫が Dataverse。もちろん全部の Power Platform アプリが Dataverse を使うとは限らない。SharePoint Lists、Excel、SQL Server、外部 SaaS をデータ源にすることもある。それでも、権限・監査・関係・本格的な業務運用まで考えると、結局 Dataverse が中心候補に戻ってくる。
+
+### 正確に言うと
+
+Power Platform は、業務アプリ、自動化、分析、Web サイト、チャットボット、AI 部品、データ基盤をまとめた Microsoft のローコード / プロコード統合基盤。
+
+| サービス | 役割 | Dataverse との関係 |
+|---|---|---|
+| Power Apps | 業務アプリの画面を作る | Canvas、Model-driven、Custom Page、Code Apps から Dataverse を使う |
+| Power Automate | 自動処理、承認、通知、連携を組む | Dataverse トリガー、Dataverse Connector で読み書き |
+| Power BI | データ分析、レポート、ダッシュボード | Dataverse をデータソースにできる |
+| Power Pages | 外部 / 社外向け Web サイト | Dataverse Table を公開し、Table Permissions で守る |
+| Copilot Studio | チャットボット、会話型 UI | Dataverse や Connector をアクションとして呼べる |
+| Dataverse | 共通データ基盤 | Table、Security Role、Web API、監査、業務ロジックを持つ |
+| Connectors | 外部サービス接続口 | SharePoint、Excel、Teams、HTTP、Dataverse などを接続 |
+| AI Builder | AI 部品 | Dataverse や Power Apps / Automate と組み合わせる |
+
+管理単位として Tenant と Environment が重要な軸になる。
+
+| 用語 | 意味 | 例え |
+|---|---|---|
+| Tenant | Microsoft 365 契約全体の器 | 会社の建物全体 |
+| Environment | Power Platform の作業空間 | 建物の中のフロア |
+| Dataverse database | Environment に作成される Dataverse のデータ領域 | フロア専用の倉庫 |
+| Default environment | テナントに自動作成される共有環境 | 全社員が出入りしがちな共用スペース |
+
+Default 環境は便利だが、業務本番の置き場にすると痛い目を見る。全社ユーザーが Maker ロールを持ち、資産が個人所有になりやすく、管理方針がぼやけやすい。手動バックアップも取れない。PoC でも、実データや本番化前提のものは専用の開発環境・Sandbox・管理者が許可した環境で行う。Default 環境を「お試しスペース」にすると、誰かの私物アプリが本番化してそのまま放置され、退職時に孤児化する事故が定番。
+
+### VBA 的にいうと
+
+Power Platform 全体を Excel 世界に置き換えると、Excel・Outlook・Teams・SharePoint・Access・Power Query・VBA・タスクスケジューラ・共有フォルダを、会社全体で統合管理しているような姿になる。
+
+VBA では「このブックを配れば動く」という配布の手軽さが強い。一方 Power Platform では「どの Environment にあり、誰が所有し、どの Connector を使い、どの Solution で移送し、どの DLP に従うか」が常に問われる。ブックを配る感覚で本番化しようとすると、必ずどこかで止まる。
+
+### 図
+
+```mermaid
+graph TD
+    Tenant[Microsoft 365 Tenant]
+    Tenant --> EnvDev[Environment: Dev]
+    Tenant --> EnvTest[Environment: Test]
+    Tenant --> EnvProd[Environment: Prod]
+    Tenant --> EnvDefault[Environment: Default]
+
+    EnvProd --> Apps[Power Apps]
+    EnvProd --> Automate[Power Automate]
+    EnvProd --> BI[Power BI]
+    EnvProd --> Pages[Power Pages]
+    EnvProd --> Copilot[Copilot Studio]
+    EnvProd --> DV[Dataverse]
+    Apps --> DV
+    Automate --> DV
+    Pages --> DV
+    BI --> DV
+```
+
+### 混同しやすい近接概念
+
+「Power Apps」と「Power Platform」は別物。Power Apps は Power Platform の一部であって全部ではない。
+
+「Environment」と「Dataverse」も別。Environment は作業空間で、Dataverse はその中に作れるデータ基盤。Environment は作ったけれど Dataverse database を有効にしていない、という状態もあり得る。
+
+「Dataverse」と「Dataverse for Teams」は混同が頻発する罠。Dataverse for Teams は Teams 内利用に振り切った軽量版で、本格 Dataverse とは容量・機能・ライフサイクル・移行方針が違う。PoC で Dataverse for Teams を使い、本番で「In-Place アップグレードできない」と分かって作り直し、という展開はよくある。後述するが、Microsoft Lists / SharePoint Lists と Dataverse for Teams も別物。混ぜて呼ばないようにする。
+
+### ここを押さえれば次に進める
+
+Power Platform は、Apps・Automate・BI・Pages・Copilot・Dataverse・Connectors の集合体。Dataverse はその中心に据えやすい共通データ基盤だが、Environment・DLP・ライセンス・ALM とセットで考える。Default 環境を本番の代用にしない、というのは早めに刷り込んでおいた方がいい。
+
+---
+
+## 10. Dataverse は「何の代わり」か
+
+### ふんわり入口
+
+Dataverse を「Excel の代わり」とだけ説明すると、半分しか伝わらない。「Access の代わり」もまだ足りない。
+
+近いのは、次の部品が最初から合体した業務基盤だ。
+
+- データを置く倉庫
+- 倉庫の棚割り(誰がどの棚を触れるか)
+- 入館証と部屋の鍵
+- 注文窓口 (API)
+- 変更履歴の記録機
+- 業務ルールを差し込むためのコンセント
+- 他システムへの通知装置
+- 開発環境から本番環境へ運ぶ箱
+
+自前で Web アプリを組むなら、DB、ORM、認証、認可、API、監査ログ、イベントキュー、管理画面、デプロイ手順を別々の道具で揃える。Dataverse はこの大半を Microsoft のクラウド基盤として最初から提供している。便利だが、便利なぶん設計の責任範囲も広い。
+
+### 正確に言うと
+
+Dataverse は、Power Platform と Dynamics 365 で使われるクラウドベースのデータプラットフォーム。業務データを Table で管理し、セキュリティ、ビジネスロジック、API、監査、検索、統合、ALM までを統合して提供する。
+
+「何の代わりか」を要素ごとに分解すると、こうなる。
+
+| 自前システムの部品 | Dataverse 側の対応 |
+|---|---|
+| RDBMS のテーブル | Table (旧 Entity) |
+| カラム定義 | Column (旧 Field / Attribute) |
+| レコード | Row (旧 Record) |
+| 外部キー | Lookup、Relationship |
+| ORM | Dataverse SDK、Web API、Connector が抽象化 |
+| 認可 | Security Role、Business Unit、Team、Owner、Sharing |
+| 行 / 列の権限 | Privilege Depth、Column-level security |
+| API | Dataverse Web API (OData v4)、Organization Service |
+| サーバー側イベント | Plug-in、Custom API、Business Rule、Power Automate |
+| 監査 | Audit、Power Platform Activity、Unified Audit |
+| デプロイ単位 | Solution |
+| 環境分離 | Environment |
+
+Dataverse は SQL Server そのものではない。利用者が直接 DDL を書いて自由に JOIN する DB ではなく、Power Platform のメタデータ・セキュリティ・API を通して扱う、もう一段抽象化された世界。
+
+### VBA 的にいうと
+
+Access + ADO + フォーム + 権限 + 監査 + 配布管理をクラウド化したもの、と言うと近い。ただし Access のように `.accdb` を開いてフォームを叩くのではなく、クラウド上の Dataverse に Connector や Web API でアクセスする。
+
+Excel で「入力シート」「マスタシート」「非表示設定シート」「VBA 処理」「保護パスワード」を一体で組んでいたものを、Dataverse では Table、Relationship、Security Role、Business Rule、Solution に分解する。役割を分けるぶん、最初のセットアップは Excel より重い。代わりに、複数人運用と監査と移送が真っ当に回る。
+
+### コード例
+
+Dataverse Web API で Account を作る HTTP 例。
+
+```http
+POST https://org.crm.dynamics.com/api/data/v9.2/accounts HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "株式会社サンプル",
+  "telephone1": "03-0000-0000"
+}
+```
+
+JavaScript なら、同じことをこう書く。
+
+```javascript
+async function createAccount(accessToken) {
+  const response = await fetch(
+    "https://org.crm.dynamics.com/api/data/v9.2/accounts",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({
+        name: "株式会社サンプル",
+        telephone1: "03-0000-0000"
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${await response.text()}`);
+  }
+}
+```
+
+Power Fx なら 1 行で済む。
+
+```powerfx
+Patch(Accounts, Defaults(Accounts), { 'Account Name': "株式会社サンプル", 'Main Phone': "03-0000-0000" })
+```
+
+### 混同しやすい近接概念
+
+「Dataverse は DB である」と「Dataverse は DB だけである」は別。Dataverse はデータ保存もするが、Security Role・Business Unit・Web API・Plug-in・Solution などとセットで使う前提で設計されている。
+
+「SharePoint Lists で十分」と「Dataverse が必要」は要件で決まる。単純なリスト、軽い申請、M365 範囲の共有なら SharePoint Lists で足りる場面もある。複雑な Relationship、Column-level security、本格 ALM、複数 UI、監査要件が出てきたら Dataverse が候補に上がる。Lists で始めて要件が育って Dataverse に移す、というのは「移行コストが大きい」前提で計画する。
+
+「中間 API を挟めば Dataverse 制限を回避できる」も誤解。BFF や API 中間層を挟んでも、Dataverse 側の Security Role、API 制限、容量、ライセンス、監査の問題は消えない。隠れて見えにくくなるだけで、本番審査では結局そこを聞かれる。
+
+### ここを押さえれば次に進める
+
+Dataverse は DB、ORM、認可、API、イベント、監査、ALM までを束ねた業務データ基盤。便利な反面、単なる保存先より設計範囲が広い。Table を作る前に、誰が使い、どの権限で、どの画面 / API から、どう本番運用するかをひと通り考えてから手を動かす。
+
+---
+
+## 11. Entra ID
+
+### ふんわり入口
+
+Entra ID は、Microsoft 365 の「社員証発行所」だ。
+
+会社の建物に入るとき、受付や入館ゲートで「この人は社員か」「MFA を通ったか」「会社管理端末から来ているか」を確認する。これが Entra ID の世界。
+
+ただし、建物に入れたからといって、経理の金庫まで自由に開けられるわけではない。Dataverse の世界では、入館後に Security Role や Business Unit で「何を触っていいか」を別途決める。この 2 段階を切り分けて捉えるのが Dataverse 連携の肝。
+
+### 正確に言うと
+
+Microsoft Entra ID(旧 Azure Active Directory)は、Microsoft クラウドの ID およびアクセス管理基盤。ユーザー、グループ、アプリケーション、サービスプリンシパル、条件付きアクセス、MFA、トークン発行を扱う。
+
+Dataverse 連携で頻出する用語をまとめる。
+
+| 用語 | 世界 | 意味 |
+|---|---|---|
+| Tenant | Entra / M365 | 会社全体の ID 管理単位 |
+| User | Entra | 人間のアカウント |
+| Group | Entra | ユーザーのまとまり |
+| App Registration | Entra | アプリの定義。Client ID、Redirect URI を持つ |
+| Service Principal | Entra | Tenant 内でのアプリの実体 |
+| Application User | Dataverse | Dataverse 側でアプリをユーザーとして扱う登録 |
+| Security Role | Dataverse | Table 操作権限の束 |
+| Delegated permission | Entra / API | 人間の代わりにアプリが呼ぶ権限 |
+| Application permission | Entra / API | アプリ自身が呼ぶ権限 |
+| S2S | Dataverse 連携 | Server-to-Server。Client Credentials など |
+| OBO | Entra | On-Behalf-Of。バックエンドがユーザー代理で下流 API を呼ぶ |
+
+Delegated は「社員本人が受付を通り、隣にいる代理人にも書類提出を頼む」イメージ。代理人ができることは、最終的に本人の権限の範囲に縛られる。
+
+Application / S2S は「業務委託会社の専用入館証」のイメージ。人間ではなくアプリ自体に権限が紐づく。Dataverse 側では Application User を登録し、Security Role を割り当てて初めて使える。Service Principal を作っただけでは Dataverse は気付かない。
+
+OBO は、フロントでログインしたユーザーの文脈をバックエンドに渡し、バックエンドがその人の代理で Dataverse を呼ぶ構成。BFF を挟みつつ、「監査はユーザー単位で残したいが、トークン管理とリトライはサーバー側に閉じたい」場合の本命解。
+
+### VBA 的にいうと
+
+社内共有フォルダの `.xlsm` を開くとき、Windows ログインや NTFS 権限に乗っかって認証している。これは「OS が認証を肩代わりしている」状態。Entra ID は、そのクラウド版の入口。
+
+VBA マクロに直接 Client Secret を書いて Dataverse を叩く、という構成は、社員証のコピーを全員に配るに等しい。アプリの資格情報は、サーバー側・Key Vault・Managed Identity・証明書のいずれかで管理する。これは「VBA だから許される」例外にはならない。
+
+### 図
+
+```mermaid
+graph TD
+    Human[人間ユーザー] --> Entra[Entra ID]
+    App[App Registration] --> SP[Service Principal]
+    SP --> Token[Access Token]
+    Token --> DV[Dataverse]
+    DV --> SysUser[System User]
+    DV --> AppUser[Application User]
+    SysUser --> Role1[Security Role]
+    AppUser --> Role2[Security Role]
+```
+
+### コード例
+
+Delegated で Dataverse を呼ぶ場合、フロントでは MSAL などを使ってユーザーのトークンを取る。
+
+```javascript
+const token = await msalInstance.acquireTokenSilent({
+  scopes: ["https://org.crm.dynamics.com/user_impersonation"],
+  account: msalInstance.getActiveAccount()
+});
+
+const whoami = await fetch(
+  "https://org.crm.dynamics.com/api/data/v9.2/WhoAmI",
+  { headers: { Authorization: `Bearer ${token.accessToken}` } }
+).then(r => r.json());
+
+console.log(whoami.UserId);
+```
+
+S2S では、Client Credentials で取得したトークンを使う。前提として Dataverse 側に Application User と Security Role が必要。
+
+```mermaid
+sequenceDiagram
+    participant App as アプリ
+    participant E as Entra ID
+    participant DV as Dataverse
+
+    App->>E: Client ID + Secret
+    E-->>App: Access Token
+    App->>DV: Bearer Token + リクエスト
+    DV->>DV: トークン検証 → Application User 特定
+    DV->>DV: Security Role 確認
+    DV-->>App: 200 / 403 / 401
+```
+
+### 条件付きアクセスとの関係
+
+Entra ID のトークン発行には、条件付きアクセス (Conditional Access) が容赦なく絡んでくる。これが本番障害の常連。
+
+- **準拠デバイス必須**: BYOD や個人 PC、検証機からのアクセスを全弾き
+- **MFA 要求**: VBA / デスクトップアプリのデバイスコードフローで対話補完が要り、自動化に向かなくなる
+- **サインイン頻度**: トークンの有効期限が短くなり、自動化ジョブが定期的に切れる
+- **継続的アクセス評価 (CAE)**: ユーザー状態の変化が即時反映、長時間バッチの途中で切られる
+- **国 / 地域ベース**: 海外出張中アクセス不可
+- **デバイスコードフロー禁止**: コピペ式の認証フローがブロックされる
+
+調査時は、Entra ID 管理センター → 条件付きアクセス → 「What If」で、対象ユーザー + リソース(`https://*.crm.dynamics.com`)を選んで評価をかける。これをやらないと本番直前で止まる。
+
+### 混同しやすい近接概念
+
+「App Registration を作った」と「Dataverse に入れる」は別。App Registration は Entra ID 側の登録に過ぎず、Dataverse 側ではあらためて Application User として登録して Security Role を付けないと、`401` か `403` で跳ね返される。
+
+「Delegated permission」と「Application permission」も別物。Delegated は人間の代理、Application はアプリ自身。監査、権限、ライセンス、条件付きアクセスの効き方が変わる。
+
+「Service Principal」と「Application User」も別。Service Principal は Entra ID 内のアプリ実体。Application User は Dataverse 内のユーザー行。同じアプリでも、両方の世界に登録が要る。
+
+### ここを押さえれば次に進める
+
+Entra ID は認証の世界、Dataverse は権限とデータの世界。アプリ連携では、Entra ID でトークンをもらい、Dataverse でその主体に何を許すかを判定する。2 世界の対応表を作っておくと、`401` / `403` の切り分けが一瞬で終わる。
+
+---
+
+## 12. データモデルの言葉
+
+### ふんわり入口
+
+データモデルは、業務の地図だ。
+
+顧客、担当者、案件、見積、商品、請求、承認、これらを「どの箱に入れるか」「箱同士をどう繋ぐか」として整理する。地図が曖昧だと、画面もフローもレポートも全部迷子になる。
+
+Dataverse のデータモデルは、Table・Column・Row・Choice・Lookup・Relationship が基本語彙。古い資料や Dynamics 365 由来の画面では、Entity・Field・Attribute・Record という旧名も今だに混じる。両方読めるようにしておく。
+
+### 正確に言うと
+
+Dataverse の主要なデータモデル用語。
+
+| 現行寄りの表記 | 旧名 / 近い言葉 | 意味 |
+|---|---|---|
+| Table | Entity | 行を格納する箱 |
+| Column | Field / Attribute | Table の項目 |
+| Row | Record | Table 内の 1 件 |
+| Primary column | Primary name field | 参照表示に使われる代表列 |
+| Choice | Option Set / Picklist | 選択肢 |
+| Global Choice | Global Option Set | 複数 Table で共有する選択肢 |
+| Lookup | Lookup field | 他 Table の Row を参照する列 |
+| Relationship | Relationship | Table 間の関係 |
+| One-to-many | 1:N | 1 つの親に複数の子 |
+| Many-to-one | N:1 | 多くの子が 1 つの親を参照 |
+| Many-to-many | N:N | 中間関係を通じた多対多 |
+| Alternate Key | 代替キー | GUID 以外で一意性を持たせるキー |
+| Business Rule | ビジネスルール | 入力制御や値設定のルール |
+| Calculated column | 計算列 | 他列から計算される列 |
+| Rollup column | ロールアップ列 | 関連行の集計値を持つ列 |
+
+Dataverse の行には通常 GUID の主キーが付く。Account なら `accountid`。画面では取引先企業名が見えるが、内部での識別はあくまで GUID。Web API で行を指定するときも、`/accounts(<guid>)` の形で GUID を渡す。
+
+Lookup 列を Web API で設定するときは、`@odata.bind` を使う。
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/contacts(<contact-id>) HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "parentcustomerid_account@odata.bind": "/accounts(<account-id>)"
+}
+```
+
+Customer、Owner、Regarding のような Polymorphic Lookup は、参照先の型(Account なのか Contact なのか)を列名に含めて明示する必要がある。これを忘れると 400 で跳ねる。詳細は第 4 部 DV-11 で扱う。
+
+### VBA 的にいうと
+
+Excel では、顧客シートの A 列に顧客 ID、案件シートの B 列に顧客 ID を置いて、VLOOKUP や XLOOKUP で結ぶことが多い。
+
+```excel
+=XLOOKUP(B2, Customers!A:A, Customers!B:B)
+```
+
+Dataverse では、これを Lookup と Relationship として設計する。表示は顧客名でも、内部では参照先 Row の GUID を保持している。
+
+Power Fx では、Lookup 列を「文字列」ではなく「レコード」として扱う。
+
+```powerfx
+Patch(
+    Contacts,
+    Defaults(Contacts),
+    {
+        'Full Name': "山田 太郎",
+        'Company Name': LookUp(Accounts, 'Account Name' = "株式会社サンプル")
+    }
+)
+```
+
+`Company Name` に文字列ではなくレコード自体を渡すのが、Excel の参照と一番違うところ。VLOOKUP に慣れた目には最初気持ち悪いが、慣れると「データ間の参照を ID と表示名で別々に管理しなくていい」という良さが見えてくる。
+
+### 図
+
+```mermaid
+erDiagram
+    ACCOUNT ||--o{ CONTACT : has
+    ACCOUNT ||--o{ OPPORTUNITY : owns
+    CONTACT ||--o{ OPPORTUNITY : related_to
+    ACCOUNT {
+        guid accountid PK
+        string name
+        string telephone1
+    }
+    CONTACT {
+        guid contactid PK
+        string fullname
+        guid parentcustomerid FK
+    }
+    OPPORTUNITY {
+        guid opportunityid PK
+        string name
+        money estimatedvalue
+    }
+```
+
+### 混同しやすい近接概念
+
+「Choice」と「Lookup」は別物。Choice は固定的な選択肢、Lookup は別 Table の Row を参照する仕組み。部署や商品カテゴリが少数固定なら Choice、マスタとして増減や権限管理が要るなら Lookup を検討する。
+
+「ローカル Choice」と「Global Choice」も違う。ローカル Choice はその Column 専用、Global Choice は複数 Table で共有できる。場当たりにローカルを増やすと統合で泣くので、共通概念は最初から Global Choice に寄せる。
+
+「Calculated column」と「Rollup column」は親戚だが別物。Calculated は同じ行や関連値からその場で計算、Rollup は関連行を集計するが評価タイミングが即時とは限らない。即時判定が要る業務ロジックを Rollup に依存させると、画面更新直後に古い値が見える、という事故が起きる(DV-12 参照)。
+
+### ここを押さえれば次に進める
+
+Dataverse のデータモデルは Table・Column・Row・Choice・Lookup・Relationship で読む。旧名の Entity・Field・Attribute・Record も現場では生きているので、両方の語彙を持つ。Lookup は VLOOKUP に似た感覚で入れるが、型・Relationship・権限・Web API の書式が絡む点で、Excel の参照より一段深い。
+
+---
+
+## 13. 通信・API の言葉
+
+### ふんわり入口
+
+Dataverse には、外から入る道、外へ出る道、Power Platform 内の近道、の 3 種類の経路がある。
+
+会社の倉庫で例えれば、正面受付、専用搬入口、社内便、外部配送業者、倉庫内の作業員、通知ベルがあるようなもの。全部「データを動かす手段」だが、用途も責任も違う。どの経路を選ぶかで、認証・制限・監査・コストの効き方が変わる。
+
+### 正確に言うと
+
+Dataverse の通信手段を、向きで分けて並べる。
+
+| 分類 | 手段 | 役割 |
+|---|---|---|
+| インバウンド | Web API | REST / OData v4、HTTPS + JSON、OAuth 2.0。本命 |
+| インバウンド | Organization Service | 古い SOAP / .NET SDK 系。既存 Dynamics 文脈で残る |
+| インバウンド | Dataverse Connector | Power Apps / Automate から使う標準接続 |
+| インバウンド | Custom Connector | 外部 API を Power Platform に登録した接続口 |
+| インバウンド | Dataflows | Power Query 系の取り込み、定期バッチ |
+| インバウンド | Virtual Tables | 外部データを Dataverse Table のように見せる |
+| アウトバウンド | Webhooks | 変更時に HTTP POST で外部へ通知 |
+| アウトバウンド | Azure Service Bus | メッセージキュー連携 |
+| アウトバウンド | Event Hubs | 大量イベントストリーミング |
+| 内部拡張 | Plug-in | Dataverse 内で C# 処理を同期 / 非同期実行 |
+| 内部拡張 | Custom API | Dataverse 内に独自 API を定義 |
+| ノーコード | Power Automate | トリガーと Connector で自動処理 |
+| 差分取得 | Change Tracking API | 変更差分を後から取りに行く |
+
+Dataverse Web API は、ブラウザでもサーバーでも HTTP で呼べる。URL の基本形はこう。
+
+```text
+https://{org}.crm{region}.dynamics.com/api/data/v9.2/
+```
+
+最小の動作確認は WhoAmI。
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/WhoAmI
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+これが通れば、認証・ネットワーク・基本的な権限がそろっている、と判断できる。新しい接続経路を検証するとき、まず WhoAmI を投げるのが定石。
+
+Power Automate や Canvas Apps の Dataverse Connector は、利用者が HTTP を直接書かなくても Dataverse 操作を行える接続部品。裏では Dataverse の API と認証が動いているが、開発者からは Connector として見える。
+
+Custom API は、Dataverse 内に業務 API を作る仕組み。複数 Table をまたぐ重要更新、権限チェック、入力検証を 1 つの呼び出しにまとめたいときに使う。クライアント側の処理を薄く保ち、業務ロジックをサーバー側に寄せられる。
+
+### VBA 的にいうと
+
+ADO で DB に直接接続する感覚に一番近いのは Web API。違いは、接続文字列ではなく HTTPS URL、Bearer Token、JSON を使う点。
+
+Excel マクロから直接 Web API へ行くことは技術的に可能でも、OAuth・MFA・条件付きアクセス・Secret 保管で詰まりやすい。職場で配るなら、VBA → Power Automate → Dataverse、または VBA → 社内 BFF → Dataverse の構成のほうが、認証管理と監査が回しやすい。技術的に「できる」ことと、業務に乗せて「許される」ことは別の話。
+
+### 図
+
+```mermaid
+graph TD
+    External[外部 Web / バックエンド] -->|Web API| DV[Dataverse]
+    PA[Power Apps] -->|Dataverse Connector| DV
+    Flow[Power Automate] -->|Dataverse Connector| DV
+    DV -->|Webhook| API[外部 API]
+    DV -->|Service Bus| Bus[Azure Service Bus]
+    DV -->|Event| Plugin[Plug-in / Custom API]
+    Sync[同期処理] -->|Change Tracking| DV
+```
+
+### 混同しやすい近接概念
+
+「Service Endpoint」と「Web API」は別。Web API は Dataverse を呼ぶ HTTP API。Service Endpoint は Plug-in Registration Tool 系で Dataverse イベントを Azure Service Bus などに送る構成用。
+
+「Custom Connector」と「Custom API」は名前が似ているだけで別物。Custom Connector は Power Platform から外部 API を呼ぶための接続定義。Custom API は Dataverse 内に独自 API を作る機能。
+
+「Action」と「Function」は OData の文脈で別。ざっくり言うと、Function は副作用のない問い合わせ、Action は副作用を持つ処理。Dataverse では標準 Action や Custom API の設計でこの語彙が出てくる。
+
+「Webhook」と「リアルタイム双方向通信」も別。Dataverse 自体に WebSocket のような張りっぱなし双方向通信はない。リアルタイム画面更新が要るなら、Dataverse → Webhook → 自前 SignalR / Azure Web PubSub → ブラウザの中継が定石。
+
+### ここを押さえれば次に進める
+
+Dataverse の通信経路は Web API だけではない。Connector、Power Automate、Plug-in、Custom API、Webhook、Service Bus、Change Tracking まである。どの経路を選んでも、Dataverse の権限・制限・容量・監査は基本的に回避できない。経路を増やしたいなら、回避ではなく集約の発想で考える。
+
+---
+
+## 14. UI 層の選択肢
+
+### ふんわり入口
+
+Dataverse を倉庫とすると、UI は窓口に当たる。窓口にはいろんな形がある。
+
+業務担当者が毎日入力する窓口、管理者が一覧を眺める窓口、外部のお客様が申請する窓口、Teams 内でさっと操作する窓口、Excel からまとめて確認する窓口。どれも同じ Dataverse を使えるが、向き不向きがハッキリ分かれる。
+
+### 正確に言うと
+
+Dataverse を使う UI 層の代表選手。
+
+| UI | 役割 | 向く場面 |
+|---|---|---|
+| Canvas Apps | 自由配置の業務画面 | 小から中規模の入力画面、現場向けツール |
+| Model-driven Apps | Dataverse モデルから作る業務アプリ | CRUD、Form、View、権限、監査重視 |
+| Custom Page | Model-driven 内に埋め込める Canvas 寄りページ | 標準 Form では足りない操作画面 |
+| PCF | Power Apps Component Framework | 標準コントロールでは難しい UI 部品 |
+| Power Pages | 外部 / 社外向け Web サイト | ポータル、申請、顧客向けサイト |
+| Code Apps | コードファーストの Power Apps | React 等で本格 UI、Power Platform 管理下 |
+| Form | Dataverse 行の詳細入力画面 | Model-driven の基本 |
+| View | 一覧、フィルタ、列構成 | Model-driven や参照画面 |
+| Dashboard | グラフや一覧の集合 | 管理者向け概観 |
+| 独自 Web アプリ | React / Vue 等 | 独自 UX、既存 Web 基盤統合 |
+| Teams Tab | Teams 内の業務入口 | Teams が業務導線の中心 |
+| SPFx Web パーツ | SharePoint ポータル内 UI | 社内ポータルが入口 |
+| Office Add-ins | Excel / Word / Outlook 内 UI | Office 作業に密着した補助画面 |
+
+本命候補から見るなら、Dataverse 中心の CRUD は Model-driven Apps、画面自由度が要るなら Canvas Apps、独自 UI が本当に必要なら BFF / API 中間層ありの Web アプリ、というのが現実的な並びになる。詳細は第 3 部で扱う。
+
+### Power Pages の位置づけ
+
+外部 / 認証済みポータルとして使うことも多いので、本章でも触れておく。
+
+- 認証プロバイダは Entra ID、Azure AD B2C、Local Auth、Google、Microsoft Personal などから選べる。B2C を使う場合は別途 Azure サブスクリプションと B2C テナントが要る
+- Dataverse 側の Security Role とは別に、Web Role と Table Permissions という独自のアクセスモデルを持つ。Dataverse の感覚で組むと「Table Permissions の設定漏れで情報漏えい」が起きる
+- Authenticated User と Anonymous User で別ライセンス、別課金。アクセス急増で予算超過しやすい
+- Liquid テンプレートと Bootstrap / JS の Pro Code が混在する
+
+### VBA 的にいうと
+
+UserForm で自由に画面を作る感覚に近いのは Canvas Apps。Access のフォームとテーブルが結びついた感覚に近いのは Model-driven Apps。
+
+PCF は、VBA で標準コントロールでは足りず ActiveX や独自コントロールを使い始める瞬間に近い。ただし PCF は TypeScript、React、Solution、環境設定、管理者許可が一気に絡む。Excel に COM コンポーネントを差し込むより手順は重い。
+
+### コード例
+
+Canvas Apps で Dataverse に行を作る Power Fx。
+
+```powerfx
+Patch(
+    Accounts,
+    Defaults(Accounts),
+    {
+        'Account Name': txtAccountName.Text,
+        'Main Phone': txtPhone.Text
+    }
+)
+```
+
+Model-driven フォームの JavaScript で、現在行の ID を取得して Web API を呼ぶ例。
+
+```javascript
+async function onLoad(executionContext) {
+  const formContext = executionContext.getFormContext();
+  const id = formContext.data.entity.getId().replace(/[{}]/g, "");
+
+  const result = await Xrm.WebApi.retrieveRecord(
+    "account",
+    id,
+    "?$select=name,telephone1"
+  );
+
+  console.log(result.name, result.telephone1);
+}
+```
+
+`Xrm.WebApi` は Model-driven フォーム内で使える Dataverse 操作 API。素の fetch を書くより認証周りが薄くなり、`Xrm.Page` のような旧 API を使わずに済む。
+
+### 図
+
+```mermaid
+graph LR
+    DV[Dataverse]
+    Low[ローコード: Canvas / Model-driven]
+    Ext[拡張: Custom Page / PCF / Web resource]
+    Code[プロコード: Code Apps / 独自 Web / BFF]
+    Office[Office / Teams / SharePoint 入口]
+
+    Low --> DV
+    Ext --> DV
+    Code --> DV
+    Office --> DV
+```
+
+### 混同しやすい近接概念
+
+「Canvas Apps」と「Custom Page」は近いけれど別物。Custom Page は Model-driven Apps 内で使える Canvas 系ページ、と捉えるとよい。Canvas Apps 単体と Custom Page では公開単位や共有方法が違う。
+
+「PCF」と「Web resource JavaScript」も別。PCF はコントロール部品として Power Apps に統合される。Web resource JavaScript は Model-driven フォームやコマンドバーの拡張で使うスクリプト。役割が違う。
+
+「Power Pages」と「独自 Web サイト」も別物。Power Pages は Dataverse 連携と認証、Table Permissions を持つ Power Platform 内の外部向けサイト機能。独自 Web サイトは、ホスティング・認証・API・監査を自前で設計する必要がある。
+
+### ここを押さえれば次に進める
+
+UI 選定は、見た目の自由度だけで決めない。利用者導線、認証、権限、DLP、ライセンス、ALM、本番審査、端末制御まで含めて選ぶ。Dataverse 中心なら Model-driven と Canvas を最初に検討し、独自 UI は「なぜ Power Platform 標準では足りないか」を説明できる場合だけ進む。
+
+---
+
+## 15. ライフサイクルとソリューション
+
+### ふんわり入口
+
+業務ツールは、作って終わりではない。直す、試す、本番に出す、戻す、引き継ぐ、退職者から所有権を移す、監査で説明する。これだけのライフサイクルを通過する。
+
+Excel マクロをメールで配っていた時代は、「最新版どれ?」「誰が持ってる?」「古いファイルで入力された」「修正版に戻したい」が日常的に起きる。Power Platform でも、同じ問題は形を変えて起きる。だから Solution、Environment、ALM という枠組みが用意されている。
+
+### 正確に言うと
+
+ALM (Application Lifecycle Management) は、アプリや構成の作成・テスト・配布・運用・変更・廃止を管理する考え方。
+
+Power Platform / Dataverse で重要な用語。
+
+| 用語 | 意味 |
+|---|---|
+| Solution | Power Platform 資産をまとめる箱 |
+| Unmanaged solution | 開発用。直接編集できる |
+| Managed solution | 本番配布用。管理された形でインポートする |
+| Environment | Dev / Test / Prod などの分離単位 |
+| Connection Reference | Connector 接続を環境ごとに差し替える参照 |
+| Environment Variable | URL や設定値を環境ごとに変える仕組み |
+| DLP | Data Loss Prevention。Connector の組み合わせや利用を制御 |
+| Pipeline | 環境間の移送を支援する仕組み |
+| Deployment | 本番への展開 |
+| Rollback | 問題発生時に戻す手順 |
+
+基本方針は、開発環境では Unmanaged で作り、本番環境には Managed solution として入れる、という流れ。
+
+```mermaid
+graph LR
+    Dev[Dev Environment<br/>Unmanaged] --> Export[Managed Solution として Export]
+    Export --> Test[Test Environment<br/>Import Managed]
+    Test --> Prod[Prod Environment<br/>Import Managed]
+```
+
+Solution に含めるもの。
+
+| 資産 | Solution 管理 |
+|---|---|
+| Dataverse Table / Column / Relationship | 含める |
+| Model-driven App | 含める |
+| Canvas App | 含める |
+| Power Automate Flow | 含める |
+| Security Role | 含めることが多い |
+| PCF | 含める |
+| Custom API / Plug-in | 含める |
+| Connection の実体 | 参照は含めるが接続実体は環境依存 |
+| 利用者データ | 通常 Solution では運ばない |
+
+接続実体を Solution で運べないのが、本番化での落とし穴になりやすい。本番環境では、本番用のサービスアカウントで Connection Reference を再マッピングする必要があり、そのサービスアカウントに Premium ライセンスが乗っていないと Premium Connector が動かない、という連鎖事故が起きる。
+
+### VBA 的にいうと
+
+Unmanaged solution は、開発中の `.xlsm` 原本に近い。Managed solution は、配布用に固めたバージョン。
+
+ただし Excel ならファイルを丸ごとコピーするだけで済むことが多いのに対し、Power Platform では環境ごとの接続、Environment Variable、Security Role、DLP、所有者、ライセンスが絡む。「Solution の zip を本番に Import すれば動く」は嘘で、実際には Connection Reference のマッピング、Environment Variable の差し替え、Security Role の付け直し、利用者ライセンスの整備が要る。
+
+### コード例
+
+Power Platform CLI のイメージ。
+
+```powershell
+pac auth create --environment https://org.crm.dynamics.com
+pac solution export --name ContosoApp --path .\ContosoApp_managed.zip --managed true
+pac solution import --path .\ContosoApp_managed.zip
+```
+
+実案件では、CLI 利用可否、会社 PC の node / npm / dotnet / pac 許可、サービス接続、管理者承認を先に確認する。「pac が入らない」という理由で詰まる組織も普通にある。
+
+### 混同しやすい近接概念
+
+「Managed solution」と「Managed Environment」は別物。Managed solution は配布形式、Managed Environment は Power Platform 環境のガバナンス機能。会話では必ず区別する。混ぜると話が噛み合わなくなる。
+
+「Solution に入っている」と「本番で動く」も違う。Connection Reference、Environment Variable、Security Role、DLP、利用者ライセンス、共有設定がそろわないと、Solution が Import 成功しても画面が開かない。
+
+「Export / Import」と「ALM」も別。Export / Import は単なる作業。ALM は環境分離・レビュー・バージョン・戻し・監査・所有者管理まで含む運用全体を指す。
+
+### ここを押さえれば次に進める
+
+Power Platform の本番運用では Solution が中心になる。開発は Unmanaged、本番は Managed が基本。Connection Reference、Environment Variable、DLP、Security Role、所有者、ライセンスまで含めて ALM を設計する。Solution は配布の終点ではなく、運用の始点。
+
+---
+
+## 16. 運用・監査・ガバナンス
+
+### ふんわり入口
+
+業務システムは、動いている間ずっと面倒を見る必要がある。
+
+倉庫で言えば、在庫が増えすぎていないか、誰が入ったか、危険物を混ぜていないか、棚卸ししたか、鍵を返していない退職者がいないか。Dataverse でも同じで、容量、監査、API 制限、権限、DLP、環境、所有者を見続けることになる。
+
+ここを後回しにすると、PoC は動いたのに本番で止まる、本番に上げたら半年で容量警告、運用担当が退職して誰も触れない、という展開になる。
+
+### 正確に言うと
+
+Dataverse 運用で押さえる領域。
+
+| 領域 | 用語 | 見るもの |
+|---|---|---|
+| 監査 | Audit | 誰がいつ何を変更したか |
+| 容量 | DB / File / Log Capacity | データ、ファイル、ログの消費 |
+| API 制限 | Service Protection / Throttling | 429、Retry-After、同時実行、処理時間 |
+| 権限 | Security Role | Create / Read / Write / Delete / Append / Append To / Assign / Share |
+| 組織境界 | Business Unit | 部署や所有範囲の境界 |
+| チーム | Owner Team / Access Team | 複数人で所有やアクセスを管理 |
+| 列保護 | Column-level security / Field Security Profile | 特定 Column の Read / Create / Update |
+| DLP | Data policies | Connector 分類、HTTP / Custom Connector 制御 |
+| 環境管理 | Environment role / security group | 誰が環境に入れるか |
+| ログ | Power Platform Activity / Unified Audit / App Insights | 操作、実行、エラー、アプリログ |
+
+### Security Role と Privilege Depth
+
+Security Role の権限には、操作種別と「深さ」がある。
+
+| Depth | 意味のイメージ |
+|---|---|
+| User | 自分が所有する行のみ |
+| Business Unit | 自分の BU 内 |
+| Parent: Child Business Units | 親子 BU 範囲 |
+| Organization | 組織全体 |
+
+ここがクセモノで、Read は Organization でも Write が User、Append はあるが Append To はない、Assign がない、Share がない、というように操作ごとにバラつく。System Administrator では再現しない問題が一般ユーザーで噴き出すのは、ほぼここが原因。
+
+検証時は、System Administrator ではなく **一般ユーザー** で必ず動かす。これは「儀式」ではなく、本番ユーザーが遭遇する画面と API の応答を再現するために絶対に必要なステップ。
+
+### Service Protection API limits
+
+Dataverse の安定性を守るため、過剰なリクエストには制限がかかる。具体値は変動するので公式で確認するのが原則だが、目安として、5 分スライディングウィンドウ・累計実行時間・同時実行数の 3 軸で管理される。Application User もこの制限を受ける。「サーバーサイドだから無制限」は明確な誤解。
+
+`429 Too Many Requests` が返ったら、`Retry-After` ヘッダーを見て待つ。指数バックオフを入れる。
+
+```javascript
+async function dataverseFetch(url, options, retry = 3) {
+  const response = await fetch(url, options);
+
+  if (response.status === 429 && retry > 0) {
+    const retryAfter = Number(response.headers.get("Retry-After") ?? "5");
+    await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+    return dataverseFetch(url, options, retry - 1);
+  }
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${await response.text()}`);
+  }
+
+  return response;
+}
+```
+
+`$batch` を使う場合、内部ステップ数もカウント対象になる。プラグイン経由のクエリには Database execution time の追加制限が乗ることもある。
+
+### 容量と裏方テーブル
+
+Dataverse の容量は DB・File・Log の 3 軸で独立管理される。基本容量はテナントとライセンスで決まり、ライセンス追加に応じて Add-on で買い増す。
+
+容量を食い潰す犯人になりやすい裏方テーブルは、覚えておく価値がある。
+
+- **PrincipalObjectAccess (POA)** … レコード共有 (Share) を多用すると爆増する
+- **AsyncOperationBase** … 非同期処理 / Power Automate / classic workflow の履歴
+- **PluginTraceLog** … Plug-in Trace を ON のまま運用すると増える
+- **AuditBase** … 監査を全 Table / 全 Column で有効にすると肥大化
+
+「DB は余裕なのに File だけ枯れた」「Log が増えてアラート」というのは普通に起きる。Power Platform 管理センター → リソース → 容量で、3 軸別に増加要因を定期的に確認する。
+
+### VBA 的にいうと
+
+Excel 業務では「誰がいつどのセルを変えたか」を後追いするのが難しい。変更履歴や共有ブックで一部追えるが、本格的な監査には弱い。
+
+Dataverse なら Audit を有効にすれば変更履歴を残せる。ただし、全 Table 全 Column を雑に監査すれば良いというものではない。AuditBase や Log 容量が膨らむ。監査要件と容量見積もりはセットで決める。
+
+VBA で全員が同じ共有アカウントを使うと、誰の操作か分からなくなる(Multiplexing 問題)。Dataverse でも、Application User やサービスアカウントを使う構成では、監査上「誰の操作として残るか」を最初に設計する。
+
+### 図
+
+```mermaid
+graph TD
+    User[一般ユーザー] --> Role[Security Role]
+    Role --> TablePriv[Table 権限]
+    User --> BU[Business Unit]
+    User --> Team[Team]
+    TablePriv --> DV[Dataverse]
+    DV --> Audit[Audit]
+    DV --> Capacity[DB / File / Log 容量]
+    DV --> Limits[Service Protection]
+    Flow[Power Automate / Connector] --> DLP[DLP]
+    DLP --> DV
+```
+
+### 混同しやすい近接概念
+
+「Security Role」と「Environment Maker」は別物。Environment Maker は環境内でアプリやフローを作れる権限。Security Role は Dataverse のデータに対する権限。両方そろってはじめて、Maker が業務データを触れる。
+
+「DLP で Dataverse をブロックできるか」と「Dataverse 利用が安全か」も別物。Dataverse は中核 Connector で、従来型 DLP では原則ブロックできない扱いになっている。実際に問題になるのは、Dataverse 単体ではなく、HTTP・Custom Connector・外部 SaaS・Excel・SharePoint との混在パターン。詳細は第 3 部で扱う。
+
+「容量がある」と「運用上安全」も違う。DB / File / Log は別枠で消費される。添付・File / Image column・Audit・PluginTraceLog・AsyncOperationBase・POA が独自に積み上がっていく。
+
+### ここを押さえれば次に進める
+
+Dataverse 運用は、Audit・Capacity・Throttling・Security Role・Business Unit・Team・Column-level security・DLP を継続的に見る仕事。System Administrator で動いた、はゴールではない。一般ユーザー・最小権限・実データに近い量・監査ログまで揃えて検証する。
+
+<!-- PART3-PLACEHOLDER -->
