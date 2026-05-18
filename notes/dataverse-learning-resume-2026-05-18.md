@@ -2069,4 +2069,1026 @@ VBA では Excel が入っていればマクロも動く、という単純な世
 
 ライセンスは後回しにしない。アーキテクチャ候補ごとに、利用者・作成者・実行者・接続所有者・外部ユーザー・サービスアカウント・容量・Azure 費用を一覧化する。Multiplexing、D365 Use Rights、Default 環境、Managed Environment、Premium Connector は最初に確認する項目。技術が決まってから値段を聞きにいくと、購入リードタイムで月単位の遅れが出る。
 
-<!-- PART4-PLACEHOLDER -->
+---
+
+# 第 4 部 ハマりどころ事典
+
+## 20. Dataverse 特有の罠
+
+### ふんわり入口
+
+Dataverse の罠は、純粋な構文ミスより「普通の DB や Excel の感覚で組んだら見落とした」ものが圧倒的に多い。
+
+Excel なら、セルが空なら空、列が見えなければ非表示、ファイルが重ければブックが重い、というのが直感に合う。Dataverse では、権限のない列が API レスポンスから黙って消える、Read は通るのに Append To が無くて関連付けだけ失敗する、ファイル列だけ通常の JSON 更新と書式が違う、Audit や Trace が容量を食い尽くす、というのが平気で起きる。
+
+この章は読み物というより事典。実装中に「なぜか動かない」となったら、DV 番号で引く。
+
+### 正確に言うと
+
+ここからは DV-01〜DV-22 を、次の型で並べる。
+
+- **現象**: どんな振る舞いになるか
+- **なぜ起きるか**: 構造上の理由
+- **防ぐ術**: 設計・検証段階で何を見るか
+- **最小再現コード or 確認手順**: 自分で確かめる最短経路
+
+コード例は説明用の最小形。URL、Table 名、Column 名、GUID、環境固有値は実環境に合わせて置き換える。
+
+---
+
+### DV-01 Field Security Profile / Column-level security
+
+#### 現象
+
+Column-level security(旧 Field Security)が有効な Column が、権限のないユーザーには API レスポンスから黙って消える。`null` ではなくプロパティ自体が存在しなくなる。
+
+#### なぜ起きるか
+
+Dataverse は Column 単位で Read / Create / Update の権限を別管理できる。Field Security Profile に入っていないユーザー、または該当の Read 権限がないユーザーは、その Column を読む資格そのものが無い。結果として、Web API、Canvas Apps、Model-driven Apps、PCF、BFF のどこから見ても、列が存在しないかのように見える。
+
+System Administrator は全列を素通しで読めるため、開発検証だけでは絶対に再現しない。これが本番障害の温床。
+
+#### 防ぐ術
+
+- Column-level security を有効にした Column を一覧化する
+- Field Security Profile のメンバーと Read / Update / Create 権限を、`Get-CrmFieldSecurityProfile` 系の PowerShell や管理 UI で書き出す
+- **実エンドユーザーのアカウント** で Web API を叩いて、何が返らないか確認する
+- API クライアント側で「プロパティが無い」と「`null` が入っている」を区別して扱う
+- 画面では「権限が無くて非表示」と「値が未入力」を別の見え方にする
+
+#### 最小再現コード
+
+```javascript
+const row = await fetch(
+  "https://org.crm.dynamics.com/api/data/v9.2/accounts(<account-id>)?$select=name,new_secretcode",
+  { headers: { Authorization: `Bearer ${accessToken}` } }
+).then(r => r.json());
+
+console.log("has secret column", Object.hasOwn(row, "new_secretcode"));
+console.log("value", row.new_secretcode);
+```
+
+一般ユーザーで `has secret column` が `false`、System Administrator で `true` なら Column-level security が原因。
+
+---
+
+### DV-02 Business Unit 境界 + Privilege Depth
+
+#### 現象
+
+一覧は見えるのに更新できない。自分の部署の行は更新できるが、隣部署の行は更新できない。Read は通るのに Assign や Share だけ失敗する。
+
+#### なぜ起きるか
+
+Security Role の権限は、**操作種別 × 深さ** の 2 軸で独立に設定される。操作は Read / Create / Write / Delete / Append / Append To / Assign / Share の 8 種。深さは User / Business Unit / Parent: Child BU / Organization の 4 段。
+
+Read が Organization でも Write が User なら、「全社の行を読めるが、自分所有の行しか更新できない」になる。同じテーブルでも操作によって深さが食い違うことが普通にある。
+
+加えて、Modern Business Units / Matrix Data Access(2023 以降)を有効化した環境では、従来の BU オーナーシップとは別軸でアクセス可能になる。設計時の見立てが崩れやすい。
+
+#### 防ぐ術
+
+- CRUD だけでなく、Append、Append To、Assign、Share まで操作別に検証する
+- BU 階層、Modern BU、Owner Team、Access Team、共有設定を図にする
+- Security Role Browser(コミュニティアプリ)や `Test-CrmSecurityRole` でエンドユーザー権限をシミュレート
+- 「impersonation」(`MSCRMCallerID` ヘッダー)で他ユーザー名義のクエリを試す
+- **必ず一般ユーザーで** 検証する。System Administrator では再現しない
+
+#### 最小再現コード
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/accounts(<other-bu-account-id>) HTTP/1.1
+Authorization: Bearer <general-user-token>
+Content-Type: application/json
+
+{
+  "telephone1": "03-1111-2222"
+}
+```
+
+同じユーザーで自分所有行は成功し、別 BU 所有行で `403` になるなら、Privilege Depth の非対称を疑う。
+
+---
+
+### DV-03 API Service Protection
+
+#### 現象
+
+しばらく動いていた処理が急に `429` になる。Application User で実行しているのに制限される。大量更新や並列処理で途中から遅くなる。
+
+#### なぜ起きるか
+
+Dataverse には Service Protection API limits がある。一部利用者の暴走で環境全体の可用性を壊さないための保護機構。目安として、5 分スライディングウィンドウで約 6,000 リクエスト / ユーザー / サーバー、累計実行時間約 20 分、同時実行約 52。
+
+人間ユーザーだけでなく、Application User、非対話ユーザー、管理系ユーザーも対象になる。「サーバーサイドだから無制限」は誤解。
+
+`$batch` を使う場合、内部のステップ数もカウント対象。Plug-in 経由のクエリには Database execution time の追加制限が乗る。
+
+#### 防ぐ術
+
+- `429` を例外として握りつぶさない。`Retry-After` を読んで指数バックオフを入れる
+- 大量処理は分割し、同時実行数を制御する
+- Power Automate や Logic Apps の再試行ポリシーを確認
+- Power Platform 管理センター → 環境 → 分析 → Dataverse / API 要求ダッシュボードで頻度を監視
+- `x-ms-service-request-id` をログに残し、サポート問い合わせの相関 ID にする
+
+#### 最小再現コード
+
+```javascript
+async function requestDataverse(url, options) {
+  const res = await fetch(url, options);
+
+  if (res.status === 429) {
+    console.warn("429 Too Many Requests", {
+      retryAfter: res.headers.get("Retry-After"),
+      requestId: res.headers.get("x-ms-service-request-id")
+    });
+  }
+
+  return res;
+}
+```
+
+PoC 段階から 429 ログ出力を仕込む。本番でいきなり大量処理を投げる前に、許可された検証環境で意図的に過負荷を試す。
+
+---
+
+### DV-04 ペイロード上限
+
+#### 現象
+
+大きい JSON を一括送信すると `413` や `400` になる。Power Automate では途中でタイムアウトする。小さいデータでは動くのに、本番データ量で失敗する。
+
+#### なぜ起きるか
+
+Dataverse Web API には、単一リクエスト約 4MB、`$batch` 約 16MB の上限がある(具体値は変動し得る)。Connector、Power Automate、Logic Apps、File / Image column では別の上限が乗る。
+
+「複数レコード一括 PATCH」を素朴に書くと、件数次第で簡単に超過する。File column / Image column は専用のチャンクアップロード API を使う。
+
+#### 防ぐ術
+
+- 巨大 JSON を 1 回で送らない。ページング、分割、`$batch`、File column 専用 API、非同期処理を使う
+- PoC で 5MB、20MB 級のデータを意図的に流す
+- `$batch` 内の ChangeSet を分割設計する
+- 制限値は製品更新で変わる前提で、実施時点の公式情報を確認する
+
+#### 最小再現コード
+
+```javascript
+const bigText = "x".repeat(5 * 1024 * 1024);
+
+const res = await fetch(
+  "https://org.crm.dynamics.com/api/data/v9.2/new_payloadtests",
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ new_name: "payload test", new_body: bigText })
+  }
+);
+
+console.log(res.status, await res.text());
+```
+
+---
+
+### DV-05 File / Image column
+
+#### 現象
+
+通常の Column と同じ感覚で File / Image column を JSON に入れて更新しようとして失敗する。画像サムネイルが期待通りに出ない。File 容量だけ急に増える。
+
+#### なぜ起きるか
+
+File / Image column は通常の文字列や数値 Column と扱いが違う。本体は専用のチャンクアップロード / ダウンロード API で扱う。流れは「`InitializeFileBlocksUpload` → `UploadBlock` を 4MB ごとに繰り返す → `CommitFileBlocksUpload`」の 3 段。Power Automate / Logic Apps の標準コネクタは裏でこれを肩代わりしてくれるが、自前 Web API では実装が必要。
+
+Image column は複数サイズ(full / thumbnail)が自動生成されるため、容量消費を見落としやすい。
+
+#### 防ぐ術
+
+- File / Image column を設計する前に、ファイルサイズ、アップロード方法、ダウンロード権限、保持期間、File 容量、ウイルスチェック、監査要件を確認する
+- 通常の JSON PATCH で済ませようとしない
+- Postman で 25MB 級のファイルを実際に流して動作確認
+
+#### 最小再現コード
+
+```http
+POST https://org.crm.dynamics.com/api/data/v9.2/InitializeFileBlocksUpload HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "Target": {
+    "@odata.type": "Microsoft.Dynamics.CRM.new_document",
+    "new_documentid": "<row-id>"
+  },
+  "FileAttributeName": "new_file",
+  "FileName": "sample.pdf"
+}
+```
+
+レスポンスで返る `FileContinuationToken` を使って `UploadBlock` を繰り返し、最後に `CommitFileBlocksUpload` を呼ぶ。
+
+---
+
+### DV-06 DB / File / Log 容量
+
+#### 現象
+
+DB 容量は余裕なのにファイルアップロードが止まる。データ本体は少ないのに Log 容量が枯れる。監査や Trace を有効にした後から容量警告が出る。
+
+#### なぜ起きるか
+
+Dataverse 容量は DB / File / Log の 3 軸が独立。テナント基本容量の目安は DB 10GB + File 20GB + Log 2GB。ライセンス追加で各軸に容量が積まれる。
+
+容量を食い潰しやすい裏方テーブル:
+
+- **PrincipalObjectAccess (POA)** … レコード共有を多用すると爆増(→ DV-07)
+- **AsyncOperationBase** … 非同期処理 / Power Automate 履歴(→ DV-08)
+- **PluginTraceLog** … Plug-in Trace を ON のまま運用(→ DV-09)
+- **AuditBase** … 監査の対象が広すぎる(→ DV-10)
+
+3 軸のうちどれかだけ枯渇する、というパターンが本番障害の定番。
+
+#### 防ぐ術
+
+- Power Platform 管理センター → リソース → 容量で、3 軸を別々に見る
+- 「Top 容量消費テーブル」を定期確認する
+- Audit、Trace、非同期ジョブ履歴、添付の保持期間を設計時に決める
+- Trial / Developer Plan 環境は容量が小さいので、PoC で File アップロード試験をすると一瞬で埋まる
+
+#### 最小確認手順
+
+```text
+Power Platform admin center
+  → リソース
+  → 容量
+  → Dataverse
+  → Database / File / Log
+  → Top database capacity use / Top file capacity use
+```
+
+コードで再現するより、管理センターで増加要因を見るほうが実務的。
+
+---
+
+### DV-07 POA 肥大化
+
+#### 現象
+
+レコード共有を多用する環境で性能が悪化する。容量上位に `PrincipalObjectAccess` が出てくる。権限計算が複雑になって「誰がなぜ見えるか」が説明できなくなる。
+
+#### なぜ起きるか
+
+Dataverse の共有(Share)は、行単位で例外権限を付けられる便利な機能。だが、共有を大量に作ると POA テーブルが肥大化する。行ごとの例外権限が増えるほど、容量と権限計算コストが膨らむ。
+
+#### 防ぐ術
+
+- 手動 Share の多用を避ける
+- Business Unit、Owner Team、Access Team、Security Role で表現できないか先に検討
+- Share が必要でも、期限・解除・棚卸しを設計
+- 既存環境では POA 上位の参照元を調査して、Share 設計を見直す
+
+#### 最小再現コード
+
+```http
+POST https://org.crm.dynamics.com/api/data/v9.2/GrantAccess HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "Target": {
+    "@odata.type": "Microsoft.Dynamics.CRM.account",
+    "accountid": "<account-id>"
+  },
+  "PrincipalAccess": {
+    "Principal": {
+      "@odata.type": "Microsoft.Dynamics.CRM.systemuser",
+      "systemuserid": "<user-id>"
+    },
+    "AccessMask": "ReadAccess, WriteAccess"
+  }
+}
+```
+
+これを大量の行に対して回す設計は、POA 肥大化リスクとしてレビュー対象にする。
+
+---
+
+### DV-08 AsyncOperationBase 肥大化
+
+#### 現象
+
+非同期処理や Flow を多用した環境で DB 容量が増える。失敗ジョブが溜まる。古いシステムジョブ履歴が残り続ける。
+
+#### なぜ起きるか
+
+Dataverse の非同期処理、classic workflow、バックグラウンド処理などは AsyncOperationBase に履歴を残す。失敗や長期保持が積み上がると容量を消費する。
+
+#### 防ぐ術
+
+- 非同期ジョブの保持期間、失敗監視、自動削除設定を確認
+- Power Automate の実行履歴も別途見る
+- 失敗ジョブを放置しない。アラートを仕掛ける
+- Job Retention Policy で古い完了ジョブを定期削除
+
+#### 最小確認手順
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/asyncoperations?$select=name,statuscode,createdon&$top=10
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+このテーブルへのアクセス可否や名称はバージョン / 権限で変わるため、管理画面と合わせて確認する。
+
+---
+
+### DV-09 PluginTraceLog 肥大化
+
+#### 現象
+
+Plug-in の Trace を有効にしたまま本番運用し、容量が増える。障害調査用ログがいつまでも残る。
+
+#### なぜ起きるか
+
+Plug-in Trace Log は、Plug-in や Custom API の障害調査に有用な機能。だが詳細ログを常時出すと容量を消費する。高頻度処理で Trace を大量に書くと増加が速い。
+
+#### 防ぐ術
+
+- Trace は必要な期間だけ詳細化、終わったら戻す
+- 保持期間と削除手順を決める
+- ログに個人情報や Secret を出さない
+- 障害時に必要な相関 ID、入力概要、処理段階だけを出す
+
+#### 最小再現コード
+
+```csharp
+public void Execute(IServiceProvider serviceProvider)
+{
+    var tracing = (ITracingService)serviceProvider.GetService(typeof(ITracingService));
+    tracing.Trace("Custom API started. CorrelationId={0}", Guid.NewGuid());
+}
+```
+
+この Trace が本番で高頻度に出続けないよう、設定と保持を管理する。
+
+---
+
+### DV-10 AuditBase 肥大化
+
+#### 現象
+
+全 Table、全 Column で Audit を有効にした結果、Log / DB 容量が増える。監査要件を満たすつもりが、運用コストが急増する。
+
+#### なぜ起きるか
+
+Audit は誰がいつ何を変えたかを残す強力な機能。だが、更新頻度の高い Column や大量 Table で有効にすると AuditBase が膨らむ。監査ログは要るが、無制限に残せばよいわけではない。
+
+#### 防ぐ術
+
+- 監査対象 Table / Column を要件から決める
+- 保持期間、エクスポート、削除、監査レビューの手順を決める
+- 高頻度更新 Column を無差別に監査しない
+- M365 の Unified Audit Log や Application Insights との役割分担を整理する
+
+#### 最小確認手順
+
+```text
+Power Platform admin center
+  → Environment
+  → Settings
+  → Audit and logs
+  → Audit settings
+```
+
+Table / Column ごとの監査設定と容量推移をセットで確認する。
+
+---
+
+### DV-11 Lookup Polymorphic
+
+#### 現象
+
+Customer、Owner、Regarding などの Lookup に `@odata.bind` を書いたのに `400` になる。`customerid@odata.bind` で書いたら動かない。
+
+#### なぜ起きるか
+
+Polymorphic Lookup は複数の Table 型を参照できる。たとえば Customer は Account または Contact を指せる。そのため、Web API では「どの型として参照するか」を列名に含めて指定する必要がある。
+
+#### 防ぐ術
+
+- Entity set 名と参照型を明示する
+- Customer なら `customerid_account@odata.bind` または `customerid_contact@odata.bind`
+- Owner なら `ownerid@odata.bind` だけでは足りない場合があり、`/systemusers(<id>)` や `/teams(<id>)` の参照先 entity set 名を確認
+- Metadata を確認して、論理名と entity set 名を混同しない
+
+#### 最小再現コード
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/incidents(<case-id>) HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "customerid_account@odata.bind": "/accounts(<account-id>)"
+}
+```
+
+Contact を指す場合は型部分が変わる。
+
+```json
+{
+  "customerid_contact@odata.bind": "/contacts(<contact-id>)"
+}
+```
+
+---
+
+### DV-12 Calculated / Rollup 列
+
+#### 現象
+
+画面更新直後に Calculated / Rollup 列の値が期待通りに変わらない。API で更新した直後に集計値を読むと古い。
+
+#### なぜ起きるか
+
+Calculated column と Rollup column は、通常 Column と同じタイミングで即時確定するわけではない。Rollup は再計算待ちやスケジュールに影響される。計算式の内容や参照関係でも挙動が変わる。
+
+特に Rollup は内部的にバッチ的な再計算で更新されるため、業務時刻のクリティカルな判定に依存させると事故が起きる。
+
+#### 防ぐ術
+
+- 即時判定が要る業務ロジックを Rollup 値だけに依存させない
+- 重要な金額、在庫、承認判定は Plug-in、Custom API、Power Automate、またはバックエンドで明示的に処理
+- UI 上は補助表示として扱い、確定値は別途計算する
+
+#### 最小再現コード
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/new_orderlines(<line-id>) HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "new_amount": 1000
+}
+```
+
+直後に親行の Rollup 列を読む。
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/new_orders(<order-id>)?$select=new_totalamount
+Authorization: Bearer <access_token>
+```
+
+更新直後にこの値が変わっていない可能性を前提に組む。
+
+---
+
+### DV-13 ETag 未実装(楽観ロックなし)
+
+#### 現象
+
+同じ行を 2 人が編集し、後から保存した人の内容で上書きされる。先に保存された変更が消える。
+
+#### なぜ起きるか
+
+競合制御を入れていないと、後勝ち更新になる。Dataverse Web API では ETag と `If-Match` で楽観ロックを実装できるが、デフォルトでは何もしない。
+
+#### 防ぐ術
+
+- 編集画面では取得時の ETag を保持
+- 更新時に `If-Match` を付ける
+- 競合時(`412 Precondition Failed`)は、利用者に再読み込みや差分確認を促す UX を組む
+- 重要なテーブルは Plug-in でサーバー側ロックも組み合わせる
+
+#### 最小再現コード
+
+```javascript
+const getRes = await fetch(
+  "https://org.crm.dynamics.com/api/data/v9.2/accounts(<account-id>)?$select=name",
+  { headers: { Authorization: `Bearer ${accessToken}` } }
+);
+
+const etag = getRes.headers.get("ETag");
+
+const updateRes = await fetch(
+  "https://org.crm.dynamics.com/api/data/v9.2/accounts(<account-id>)",
+  {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "If-Match": etag
+    },
+    body: JSON.stringify({ name: "更新後名称" })
+  }
+);
+
+if (updateRes.status === 412) {
+  console.warn("他のユーザーが先に更新しました");
+}
+```
+
+---
+
+### DV-14 DateTime の 3 種別
+
+#### 現象
+
+日付が 1 日ずれる。日本時間で入力した時刻が UTC で保存されて見え方が変わる。日付だけのつもりがタイムゾーン変換される。
+
+#### なぜ起きるか
+
+Dataverse の DateTime 系 Column には 3 つの挙動がある。
+
+| 種別 | 振る舞い |
+|---|---|
+| User Local | UTC で保存、表示はユーザーのタイムゾーン |
+| Time-Zone Independent | UTC 変換せずそのまま保存 |
+| Date Only | 日付のみ、時刻なし |
+
+API では UTC または ISO 8601 文字列として扱われる。UI ではユーザー設定のタイムゾーンで表示。誕生日、締切日、会議開始時刻、ログ時刻を同じ Column 種別で設計すると、必ずどこかで日付ずれが起きる。
+
+#### 防ぐ術
+
+- Column 設計時に「時刻が要るか」「タイムゾーン変換するか」「日付だけか」を確定
+- 業務カテゴリごとに種別を決める(誕生日 → Date Only、会議開始 → User Local、ログ → Time-Zone Independent や User Local)
+- API テストで日本時間・UTC・日付境界(`23:59:59` や `00:00:00`)を試す
+
+#### 最小再現コード
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/new_events(<event-id>) HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "new_startat": "2026-05-18T00:30:00Z"
+}
+```
+
+日本時間表示では `2026-05-18 09:30` に見える。Date Only にすべき業務でこの形式を使うと日付ずれの原因になる。
+
+---
+
+### DV-15 Business Rule の実行範囲
+
+#### 現象
+
+Model-driven フォームでは入力制御が効くのに、Web API や Power Automate から更新すると同じルールが効かない。画面では必須のはずの値が API 経由で抜ける。
+
+#### なぜ起きるか
+
+Business Rule は設定により、フォーム側中心に動くもの、サーバー側でも動くもの、適用範囲が異なるものがある。画面制御とサーバー側検証を混同すると、API 更新でルールが抜ける。
+
+#### 防ぐ術
+
+- 重要な業務制約をフォーム制御だけに置かない
+- 必須整合性は Column 制約、Plug-in、Custom API、サーバー側 Business Rule で守る
+- 画面の非表示や必須表示は UX 補助と割り切る
+- API テストで「フォームでは弾かれる値」を直接 PATCH して、サーバー側でも弾かれるか確認
+
+#### 最小再現コード
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/accounts(<account-id>) HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "new_requiresapproval": true,
+  "new_approvalreason": null
+}
+```
+
+フォームでは `new_approvalreason` が必須表示になるのに API で `200` が返るなら、サーバー側制約が不足している。
+
+---
+
+### DV-16 Solution 依存ループ
+
+#### 現象
+
+Solution import が失敗する。削除できない Component が出る。Managed / Unmanaged layer が競合する。どの Solution が依存しているかわからなくなる。
+
+#### なぜ起きるか
+
+Power Platform の資産は相互依存する。Table、Column、Form、View、App、Flow、Security Role、PCF、Plug-in、Environment Variable が参照し合う。無計画に Solution を分けたり、Default Solution で直接触ったりすると依存関係が破綻する。
+
+#### 防ぐ術
+
+- Solution 境界を設計する(基盤 Table、共通 Choice、アプリ、Flow、Plug-in をどう分けるか)
+- 開発環境で Managed import / upgrade / delete まで検証する
+- Default Solution での直接変更を避ける
+- Solution Checker と `pac solution check` を CI に組み込む
+- Layer 管理(Active customizations と Managed 層)を理解する
+
+#### 最小確認手順
+
+```powershell
+pac solution list
+pac solution export --name ContosoApp --path .\ContosoApp.zip --managed true
+pac solution import --path .\ContosoApp.zip
+```
+
+削除やアップグレードまで含めて検証しないと、本番で依存ループに気付けない。
+
+---
+
+### DV-17 Choice 設計
+
+#### 現象
+
+似た選択肢が複数 Table に乱立する。「承認済み」「承認」「Approved」が別々の値として存在する。レポート統合や移行で困る。
+
+#### なぜ起きるか
+
+Choice は手軽に作れるため、ローカル Choice を場当たり的に増やしやすい。選択肢の値、ラベル、翻訳、将来の統合を考えずに作ると、後で意味が揃わなくなる。
+
+#### 防ぐ術
+
+- 共通概念は Global Choice を検討
+- 命名規則、値の固定、ラベル変更方針、廃止値の扱い、翻訳を最初に決める
+- 業務状態は単なる Choice ではなく、State / Status、Business Process Flow、承認履歴 Table と分けて考える
+- ローカル Choice を作るときは「これは本当にこの Column 専用か」を一度確認
+
+#### 最小再現コード
+
+```http
+PATCH https://org.crm.dynamics.com/api/data/v9.2/new_requests(<request-id>) HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "new_approvalstatus": 100000001
+}
+```
+
+Choice はラベルではなく数値で保存される。Solution を環境間で運ぶときに値がずれない設計にする。
+
+---
+
+### DV-18 Dataverse Search
+
+#### 現象
+
+検索に出るはずの行が出ない。新しく追加した Column が検索対象にならない。検索結果が更新直後に反映されない。
+
+#### なぜ起きるか
+
+Dataverse Search は環境で有効化が必要。検索対象 Table / Column、インデックス、反映待ちがある。Model-driven Apps の Quick Find や View のフィルタとは別物。
+
+#### 防ぐ術
+
+- 環境の Dataverse Search 設定を確認
+- 検索対象 Table、検索対象 Column を明示的に設定
+- 追加直後はインデックス完了を待つ前提で検証
+- 検索 UI の要件とデータ量を先に決める
+
+#### 最小確認手順
+
+```text
+Power Platform admin center
+  → Environment
+  → Settings
+  → Product
+  → Features
+  → Dataverse Search
+```
+
+検索対象 Table / Column を追加したら、反映待ち時間がある前提で検証する。
+
+---
+
+### DV-19 Change Tracking
+
+#### 現象
+
+差分同期 API を使おうとしたら対象 Table で動かない。すべての変更が取れる前提で同期設計したら漏れる。
+
+#### なぜ起きるか
+
+Change Tracking はすべての Table で常に有効ではない。Table ごとに有効化が必要で、保持期間や削除検出、初回同期、差分トークンの扱いを理解する必要がある。
+
+#### 防ぐ術
+
+- 同期対象 Table で Change Tracking を有効化
+- 初回全件同期、差分同期、削除検知、失敗時の再同期を設計
+- Webhook だけ、Change Tracking だけに寄せず、用途に応じて組み合わせる
+- 差分トークンを永続化する場所と保持期間を決める
+
+#### 最小再現コード
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/accounts?$select=name&$deltatoken=latest
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+実際の差分取得は公式手順に従う。Table 側で Change Tracking が有効かを先に確認する。
+
+---
+
+### DV-20 Currency 列
+
+#### 現象
+
+金額列を読んだら、入力金額と Base Amount がある。通貨変更後の換算が期待と違う。為替レートが絡んでレポート値がずれる。
+
+#### なぜ起きるか
+
+Dataverse の Currency 列は、Transaction Currency や Exchange Rate と連動する。入力通貨の金額と基本通貨換算額が別に管理される。単純な数値 Column とは違う。
+
+レコードに紐づく Transaction Currency が変更されたとき、過去レートで保存された Base Amount は自動再計算されない、というのが典型的な落とし穴。
+
+#### 防ぐ術
+
+- 業務で扱う通貨、基本通貨、為替レート更新、過去レート保持、レポート通貨を最初に決める
+- 単一通貨しかない業務でも、Currency 列にするか Decimal 相当でよいか検討する
+- レポート設計時に Amount と Amount_Base の使い分けを明文化
+
+#### 最小再現コード
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/opportunities(<opportunity-id>)?$select=estimatedvalue,estimatedvalue_base,exchangerate
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+`estimatedvalue` と `estimatedvalue_base` の意味を混同しない。
+
+---
+
+### DV-21 Plug-in / Custom API 制限
+
+#### 現象
+
+Plug-in や Custom API で長時間処理をしたらタイムアウトする。外部通信やパッケージ制約で動かない。同期処理に重いロジックを入れて画面保存が遅くなる。
+
+#### なぜ起きるか
+
+Dataverse Plug-in は Sandbox 内で動き、次の制約が乗る。
+
+- 実行時間 2 分以内
+- ネットワーク egress 制限(許可ドメインのみ)
+- 利用可能なライブラリ・パッケージ制約
+- `System.Net` 系の一部 API 不可
+- セキュリティ制限
+
+同期 Plug-in は利用者の保存操作に直結するため、重い処理を入れると UX が一気に悪化する。
+
+#### 防ぐ術
+
+- 重要な検証や整合性チェックは同期、長時間処理は非同期に分ける
+- 外部 API 呼び出しはタイムアウト、再試行、冪等性を設計
+- Trace と監視を入れるが、詳細 Trace を常時出さない
+- 長時間処理は Custom API + 非同期 Plug-in、または Power Automate / Logic Apps に逃がす
+
+#### 最小再現コード
+
+```csharp
+public class ValidateAccountNamePlugin : IPlugin
+{
+    public void Execute(IServiceProvider serviceProvider)
+    {
+        var context = (IPluginExecutionContext)serviceProvider.GetService(typeof(IPluginExecutionContext));
+        if (!context.InputParameters.Contains("Target")) return;
+
+        var entity = (Entity)context.InputParameters["Target"];
+        if (entity.LogicalName != "account") return;
+
+        if (entity.Contains("name") && ((string)entity["name"]).Length < 2)
+        {
+            throw new InvalidPluginExecutionException("取引先企業名は 2 文字以上にしてください。");
+        }
+    }
+}
+```
+
+この程度の検証は同期でよいが、外部 API 連携や大量更新を同期保存に入れない。
+
+---
+
+### DV-22 古い Web API 例
+
+#### 現象
+
+検索で出てきた v8.x や古い Dynamics CRM サンプルをコピーしたら動かない。`Xrm.Page` や古いエンドポイント、非推奨の認証方式を使っている。
+
+#### なぜ起きるか
+
+Dataverse は旧 Dynamics CRM、Common Data Service、Power Platform の歴史を引き継いでいる。ネット上には古い API、古い JavaScript、古い SDK、古い認証フローのサンプルが大量に残っている。
+
+#### 防ぐ術
+
+- 公式ドキュメントの日付、対象バージョン、`api/data/v9.2`、現行の `Xrm.WebApi`、MSAL、Power Platform CLI を確認
+- サンプルを読むときは、まず「これは今の Dataverse 前提か」を見る
+- Azure AD と Entra ID、Common Data Service と Dataverse、Option Set と Choice、Entity と Table、Attribute と Column が混在する文書は読み替える
+
+#### 最小再現コード
+
+古い例にありがちな形。
+
+```javascript
+// 古い書き方の例。新規実装では避ける
+var id = Xrm.Page.data.entity.getId();
+```
+
+現行寄りの Model-driven フォームでは、`executionContext` から `formContext` を取る。
+
+```javascript
+function onLoad(executionContext) {
+  const formContext = executionContext.getFormContext();
+  const id = formContext.data.entity.getId();
+  console.log(id);
+}
+```
+
+Web API URL も、現環境では `v9.2` 前提で公式確認する。
+
+```http
+GET https://org.crm.dynamics.com/api/data/v9.2/WhoAmI
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+---
+
+### VBA 的にいうと
+
+VBA でも、古いサンプルをコピーすると 32bit Office 前提、古い参照設定、ActiveX 依存、非推奨 API、TLS 問題で動かないことがある。Dataverse でも同じで、旧 Dynamics CRM 時代のサンプルが検索上位に出てくる。
+
+旧名と現行名の対応を表で持っておくと、サンプルを読むスピードが上がる。
+
+| 古い / 近い言葉 | 現在の整理 |
+|---|---|
+| Entity | Table |
+| Attribute / Field | Column |
+| Record | Row |
+| Option Set | Choice |
+| Common Data Service | Dataverse |
+| Azure AD | Microsoft Entra ID |
+| Xrm.Page | formContext 経由の API |
+| WhoAmIRequest (SOAP) | `GET /WhoAmI` (Web API) |
+
+古い言葉を見ても慌てない。ただし、新規実装でそのまま採用してよいかは別途確認する。
+
+### 混同しやすい近接概念
+
+「ハマりどころ」はバグだけではない。仕様、権限、容量、運用、ライセンス、古い情報、会社ポリシーがすべて原因になる。1 ジャンルだけ見ていても解決しない。
+
+「System Administrator で再現しない」は解決ではない。むしろ権限・BU・列セキュリティの問題を疑う最初の入口。
+
+「公式サンプルが動く」と「自社本番で通る」も別。公式サンプルは製品機能の説明であって、自社の DLP、条件付きアクセス、端末制御、監査、ライセンスまでは代わりに判断してくれない。
+
+### ここを押さえれば次に進める
+
+Dataverse の罠は、API 文法だけでなく、Security Role、BU、Column-level security、容量、Audit、Solution、古い情報に広く分布する。最小再現は、System Administrator ではなく一般ユーザー、実運用に近いデータ量、Field Security 列あり、BU 違い、429 ログ、Solution 移送まで含めて作る。「動いた」より「説明できる」を目指す。
+
+---
+
+# 付録 A. 用語対応表
+
+| 一般論 | Dataverse / Power Platform | 旧名 / 補足 |
+|---|---|---|
+| データベース | Dataverse | 共通データ基盤 |
+| 表 | Table | Entity |
+| 列 | Column | Field / Attribute |
+| 行 | Row | Record |
+| 外部キー | Lookup / Relationship | `@odata.bind` で参照 |
+| API | Dataverse Web API | OData v4 |
+| 画面 | Canvas / Model-driven / Form / View | UI 層 |
+| サーバー側処理 | Plug-in / Custom API / Power Automate | 同期 / 非同期に注意 |
+| 認証 | Entra ID | 旧 Azure AD |
+| 認可 | Security Role / BU / Team | Privilege Depth あり |
+| 配布 | Solution | Managed / Unmanaged |
+| 環境 | Environment | Dev / Test / Prod / Default |
+| データ流出防止 | DLP | Connector 分類、混在に注意 |
+| 監査 | Audit | AuditBase の容量に注意 |
+
+---
+
+# 付録 B. 実務 PoC テンプレート
+
+PoC は画面映えではなく、本番リスクを潰すために作る。次の項目を最低限埋める。
+
+| 項目 | 最小内容 |
+|---|---|
+| Table | 1 つの業務 Table、1 つの親 Table |
+| Column | 通常列、Choice、Lookup、DateTime、File、Field Security 対象列 |
+| Role | 一般ユーザー用 Security Role |
+| BU / Team | 自分の行、別 BU の行、チーム所有行 |
+| 操作 | Read / Create / Update / Delete / Append / Append To / Assign / Share |
+| API | WhoAmI、1 件取得、作成、更新、ETag 更新 |
+| 制限 | 429 ログ、5MB 級 payload、File upload |
+| DLP | Dataverse + 使用予定 Connector の組み合わせ |
+| ALM | Dev から Test へ Managed solution import |
+| 監査 | Audit、Power Platform Activity、アプリ側ログ |
+| 所有者 | 業務オーナー、環境オーナー、接続オーナー、運用担当 |
+
+---
+
+# 付録 C. 管理者への依頼項目チェックリスト
+
+自分で触れる範囲だけでは本番判断に届かない。次の確認は管理者に依頼する。
+
+| 管理領域 | 確認項目 | 依頼先 |
+|---|---|---|
+| Power Platform 環境 | Developer / Sandbox / Production の利用可否、Default 環境利用ルール | Power Platform 管理者 |
+| Managed Environment | 対象環境が Managed か、共有制限 / パイプライン / データポリシー | Power Platform 管理者 |
+| DLP | Dataverse、SharePoint、Excel Online、HTTP、Custom Connector、Azure、外部 SaaS の分類 | Power Platform 管理者 |
+| Advanced connector policies | 許可リスト、endpoint 制限、Custom Connector host 制限 | Power Platform 管理者 |
+| 環境 security group | 誰が環境に入れるか、JIT 追加か、部署別分離 | Power Platform 管理者 |
+| Dataverse security role | 一般ユーザー用 role、作成者 role、Application User 用 role | Dataverse 管理者 |
+| Field Security Profile | 列セキュリティ対象列、Profile メンバー、Read / Update / Create | Dataverse 管理者 |
+| Business Unit | BU 階層、Modern BU、Team / Owner 設計 | Dataverse 管理者 |
+| 容量 | DB / File / Log 使用量、Top 消費テーブル、Audit / POA / AsyncOperationBase | Power Platform 管理者 |
+| アプリ登録 | ユーザーがアプリ登録可能か、申請ルート、命名 / 所有者ルール | Entra 管理者 |
+| 管理者同意 | `user_impersonation`、Graph、SharePoint、Teams SSO 等の承認手順 | Entra / M365 管理者 |
+| 条件付きアクセス | 準拠デバイス、MFA、サインイン頻度、CAE、地域、デバイスコード禁止 | Entra 管理者 |
+| サービスプリンシパル | Application User 作成可否、証明書 / Secret 保管、ローテーション方針 | Entra / Dataverse 管理者 |
+| Teams app policy | カスタムアプリ upload、組織配布、Manifest、アプリ許可ポリシー | Teams 管理者 |
+| SharePoint App Catalog | テナント / サイト App Catalog、SPFx 配布、API access 承認 | SharePoint 管理者 |
+| Office Add-ins | 集中配信、サイドロード、AppSource、組織アドイン | M365 / Exchange 管理者 |
+| 端末制御 | VBA、EXE / MSI、Store、VS Code、node / npm、dotnet、pac、ODBC | 端末 / Intune 管理者 |
+| ネットワーク | Dynamics / Power Platform / Graph / Azure / Office CDN の許可、TLS inspection | ネットワーク管理者 |
+| 監査 / ログ | 統一監査ログ、Dataverse audit、Power Platform Activity、App Insights | セキュリティ / 監査 |
+| ライセンス | Power Apps / Automate / Pages / BI / Copilot / Azure 課金の購入ルート | SAM / 購買 |
+| 社内事例 | 既存 Power Apps / Dataverse / Teams Tab / SPFx / Power Pages の利用例 | CoE / IT Champion |
+
+---
+
+# 付録 D. ネットワーク許可ドメイン
+
+Dataverse / Power Platform 連携で社内プロキシ・TLS inspection の許可リストに入れておくドメイン。リージョンはテナントの Home region で変わる。
+
+- `*.dynamics.com`, `*.crm.dynamics.com`, `*.crm{region}.dynamics.com`
+- `*.api.crm{region}.dynamics.com` (Web API エンドポイント)
+- `*.svc.dynamics.com`
+- `login.microsoftonline.com`, `graph.microsoft.com`
+- `*.powerapps.com`, `*.powerautomate.com`, `*.powerplatform.com`
+- `*.flow.microsoft.com`
+- `cdn.office.net`, `*.officeapps.live.com` (Office Add-ins / Scripts)
+
+Proxy / SSL Inspection が間に入る環境では、Microsoft 証明書ピンニングが失敗する組織もある(ネット監視装置が MITM 状態になっている場合)。
+
+---
+
+# 付録 E. 調査に使う代表ツール
+
+| 用途 | ツール |
+|---|---|
+| 環境 / DLP / 容量 / 分析 | Power Platform 管理センター |
+| Solution / Table / 列セキュリティ / アプリ共有 / Code Apps / PCF | Power Apps maker portal (`make.powerapps.com`) |
+| アプリ登録 / API permission / 管理者同意 / 条件付きアクセス What If | Entra ID 管理センター |
+| ライセンス / Office Scripts / Office Add-ins / 監査 | Microsoft 365 管理センター |
+| カスタムアプリ / Permission policies / 配布 | Teams 管理センター |
+| App Catalog / API access / サイト / 外部共有 | SharePoint 管理センター |
+| 環境 / DLP / ロール一覧 | `Microsoft.PowerApps.Administration.PowerShell` |
+| Dataverse 接続 / FetchXML | `Microsoft.Xrm.Tooling.PowerShell` |
+| Entra ID 権限 / CA 確認 | `Microsoft.Graph.PowerShell` |
+| Solution チェッカー | `Microsoft.PowerApps.Checker.PowerShell` |
+| 環境作成 / Solution Import / PCF 開発 | `pac` (Power Platform CLI) |
+| テナント全体の設定確認 | `m365` (CLI for Microsoft 365) |
+| API 最小テスト | Postman + `GET /api/data/v9.2/WhoAmI` |
+
+---
+
+# 付録 F. 参考確認先
+
+製品状態、制限値、ライセンスは Microsoft の都合で変わる。実案件では必ず実施時点で公式情報を確認する。
+
+- Dataverse Web API / Developer Guide: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/overview
+- Dataverse API limits overview: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/api-limits-overview
+- Dataverse Service Protection API limits: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/api-limits
+- Dataverse connector throttling: https://learn.microsoft.com/en-us/connectors/commondataserviceforapps/
+- Dataverse file column data / chunking: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/file-column-data
+- Dataverse storage capacity: https://learn.microsoft.com/en-us/power-platform/admin/capacity-storage
+- Dataverse security roles: https://learn.microsoft.com/en-us/power-platform/admin/database-security
+- Column-level security: https://learn.microsoft.com/en-us/power-platform/admin/field-level-security
+- Power Platform DLP connector classification: https://learn.microsoft.com/en-us/power-platform/admin/dlp-connector-classification
+- Power Platform environments overview: https://learn.microsoft.com/en-us/power-platform/admin/environments-overview
+- Power Platform ALM basics: https://learn.microsoft.com/en-us/power-platform/alm/basics-alm
+- Power Apps code apps overview: https://learn.microsoft.com/en-us/power-apps/developer/code-apps/overview
+- Dataverse for Teams overview: https://learn.microsoft.com/en-us/power-platform/admin/about-teams-environment
+- Comparing Lists, Dataverse for Teams, and Dataverse: https://learn.microsoft.com/en-us/power-apps/teams/compare-data-sources
+- Office Scripts external calls: https://learn.microsoft.com/en-us/office/dev/scripts/develop/external-calls
+- Power Platform licensing FAQ: https://learn.microsoft.com/en-us/power-platform/admin/powerapps-flow-licensing-faq
+- Power Automate licensing FAQ: https://learn.microsoft.com/en-us/power-platform/admin/power-automate-licensing/faqs
+
+---
+
+# 付録 G. 全体感
+
+このレジュメは「Dataverse の使い方百科」ではなく、「厳しめの会社環境で Dataverse を本番に乗せ切るための地図」として読む。
+
+最初に見るべきはフロント技術ではなく、データ分類、ID 方式、ライセンス、DLP、ALM、ホスティング、運用責任の 7 点だ。そのうえで、Dataverse 中心の業務アプリなら Model-driven / Canvas、独自 UI が必須なら BFF / API 中間層、ユーザー導線重視なら Teams Tab / SPFx を優先して比較する。
+
+Excel / VBA / Office Scripts / RPA / iPaaS は、局所用途では強い武器になる。だが本番の中核 UI に据えるには、監査・配布・権限・ライセンス・保守の説明コストが高い。Power Pages、Virtual Tables、Synapse / Fabric は用途がハマるときに強いが、汎用フロントとして安易に選ぶと別種のガバナンス課題を抱える。
+
+最終判断は「技術的に作れるか」ではなく、「誰の権限で動き、誰が費用を払い、誰が監査され、誰が障害対応し、誰が退職後も維持するか」で決まる。技術選定はその答えに合わせる方が結局速い。
+
