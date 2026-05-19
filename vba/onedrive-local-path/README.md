@@ -27,6 +27,12 @@ filePath = convURLtoLocalPath(ThisWorkbook.FullName)
 folderPath = convURLtoLocalPath(ThisWorkbook, returnInputOnFail:=False)
 ```
 
+`SyncEngineDatabase.db` を読まない軽量版もあります。SharePoint / OneDrive URL とローカル同期パスの対応が `<cid>.ini` / `ClientPolicy*.ini` だけで作れる環境では、こちらの方が速く動きます。
+
+```vb
+folderPath = convURLtoLocalPathLight(ThisWorkbook, returnInputOnFail:=False)
+```
+
 ## 診断ログ
 
 変換できない場合や、成功/失敗の条件差を調べたい場合は次を実行します。
@@ -52,6 +58,12 @@ convURLtoLocalPathDebug ThisWorkbook, False
 ```
 
 `convURLtoLocalPathDebug` は引数付きのため、Excel のマクロ一覧には表示されない場合があります。
+
+`SyncEngineDatabase.db` を読まない軽量診断は、`Alt + F8` から次を実行します。
+
+```vb
+DebugThisWorkbookLocalPathLight
+```
 
 ## デモ
 
@@ -109,6 +121,8 @@ Personal\SyncEngineDatabase.db
 このモジュールは、実務で使いやすいように安全側へ寄せた軽量実装です。`VBA-FileTools` や Guido Witt-Dörring 氏の Gist の考え方を参考にしていますが、完全移植ではありません。
 
 `.dat` からフォルダ対応を取得できない場合は、`SyncEngineDatabase.db` も読み取ります。SQLite API や外部DLLは使わず、VBAのバイナリ読み取りだけで必要なフォルダID、親ID、フォルダ名を抽出します。
+
+`convURLtoLocalPathLight` と `DebugThisWorkbookLocalPathLight` は `SyncEngineDatabase.db` を読みません。
 
 OneDrive クライアントの設定ファイル形式は更新される可能性があります。失敗を許容できない業務処理では、変換結果が URL のままではないことと、対象パスが存在することを呼び出し側で確認してください。
 

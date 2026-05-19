@@ -23,42 +23,62 @@ Public Function convURLtoLocalPath(ByVal source As Variant, _
                                    Optional ByVal rebuildCache As Boolean = False, _
                                    Optional ByVal returnInputOnFail As Boolean = True, _
                                    Optional ByVal requireExists As Boolean = True) As String
+    convURLtoLocalPath = ConvertURLtoLocalPathInternal(source, rebuildCache, _
+                                                       returnInputOnFail, _
+                                                       requireExists, True)
+End Function
+
+Public Function convURLtoLocalPathLight(ByVal source As Variant, _
+                                        Optional ByVal rebuildCache As Boolean = False, _
+                                        Optional ByVal returnInputOnFail As Boolean = True, _
+                                        Optional ByVal requireExists As Boolean = True) As String
+    convURLtoLocalPathLight = ConvertURLtoLocalPathInternal(source, rebuildCache, _
+                                                            returnInputOnFail, _
+                                                            requireExists, False)
+End Function
+
+Private Function ConvertURLtoLocalPathInternal(ByVal source As Variant, _
+                                               ByVal rebuildCache As Boolean, _
+                                               ByVal returnInputOnFail As Boolean, _
+                                               ByVal requireExists As Boolean, _
+                                               ByVal useDatabase As Boolean) As String
     Dim originalPath As String
     originalPath = GetInputPath(source)
 
     If Len(originalPath) = 0 Then Exit Function
     If Not IsHttpsUrl(originalPath) Then
-        convURLtoLocalPath = originalPath
+        ConvertURLtoLocalPathInternal = originalPath
         Exit Function
     End If
 
     On Error GoTo Fail
 
     Dim providers As Collection
-    Set providers = GetProviderCache(rebuildCache)
+    Set providers = GetProviderCache(rebuildCache, useDatabase)
 
     Dim resolvedPath As String
     resolvedPath = ResolveWithProviders(NormalizeUrl(originalPath), providers, requireExists)
 
     If Len(resolvedPath) = 0 And Not rebuildCache Then
-        Set providers = GetProviderCache(True)
+        Set providers = GetProviderCache(True, useDatabase)
         resolvedPath = ResolveWithProviders(NormalizeUrl(originalPath), providers, requireExists)
     End If
 
     If Len(resolvedPath) > 0 Then
-        convURLtoLocalPath = resolvedPath
+        ConvertURLtoLocalPathInternal = resolvedPath
     ElseIf returnInputOnFail Then
-        convURLtoLocalPath = originalPath
+        ConvertURLtoLocalPathInternal = originalPath
     End If
 
     Exit Function
 
 Fail:
-    If returnInputOnFail Then convURLtoLocalPath = originalPath
+    If returnInputOnFail Then ConvertURLtoLocalPathInternal = originalPath
 End Function
 
 Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
-                                   Optional ByVal writeToSheet As Boolean = True)
+                                   Optional ByVal writeToSheet As Boolean = True, _
+                                   Optional ByVal useDatabase As Boolean = True)
     Dim rows As New Collection
     On Error GoTo Failed
 
@@ -74,6 +94,7 @@ Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
     AddDebugRow rows, "Input", "ThisWorkbook.Path", SafeWorkbookProperty("Path")
     AddDebugRow rows, "Input", "ThisWorkbook.FullName", SafeWorkbookProperty("FullName")
     AddDebugRow rows, "Input", "Is HTTPS URL", CStr(IsHttpsUrl(inputPath))
+    AddDebugRow rows, "Input", "Use SyncEngineDatabase.db", CStr(useDatabase)
 
     Dim normalizedUrl As String
     If IsHttpsUrl(inputPath) Then
@@ -81,10 +102,10 @@ Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
         AddDebugRow rows, "Input", "Normalized URL", normalizedUrl
     End If
 
-    AddSettingsDebugRows rows
+    AddSettingsDebugRows rows, useDatabase
 
     Dim providers As Collection
-    Set providers = BuildProvidersFromOneDriveSettings()
+    Set providers = BuildProvidersFromOneDriveSettings(useDatabase)
     AddDebugRow rows, "Providers", "Total providers", CStr(providers.Count)
     AddProviderDebugRows rows, providers, normalizedUrl
 
@@ -94,7 +115,7 @@ Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
         AddDebugRow rows, "Resolve", "requireExists=False", _
                     ResolveWithProviders(normalizedUrl, providers, False)
         AddDebugRow rows, "Resolve", "Public function result", _
-                    convURLtoLocalPath(inputPath, True, False, True)
+                    ConvertURLtoLocalPathInternal(inputPath, True, False, True, useDatabase)
     End If
 
     GoTo Done
@@ -112,6 +133,13 @@ End Sub
 Public Sub DebugThisWorkbookLocalPath()
     convURLtoLocalPathDebug ThisWorkbook, True
     MsgBox "Diagnostic log was written." & vbCrLf & _
+           "Sheet: OneDrive Path Debug" & vbCrLf & _
+           "Immediate: press Ctrl+G in the VBE", vbInformation
+End Sub
+
+Public Sub DebugThisWorkbookLocalPathLight()
+    convURLtoLocalPathDebug ThisWorkbook, True, False
+    MsgBox "Light diagnostic log was written." & vbCrLf & _
            "Sheet: OneDrive Path Debug" & vbCrLf & _
            "Immediate: press Ctrl+G in the VBE", vbInformation
 End Sub
@@ -193,21 +221,35 @@ Private Sub WriteDebugRowsToSheet(ByVal rows As Collection)
 Done:
 End Sub
 
-Private Function GetProviderCache(ByVal rebuildCache As Boolean) As Collection
-    Static cachedProviders As Collection
-    Static lastBuilt As Date
+Private Function GetProviderCache(ByVal rebuildCache As Boolean, _
+                                  ByVal useDatabase As Boolean) As Collection
+    Static cachedProvidersWithDb As Collection
+    Static cachedProvidersLight As Collection
+    Static lastBuiltWithDb As Date
+    Static lastBuiltLight As Date
 
-    If cachedProviders Is Nothing _
-       Or rebuildCache _
-       Or DateDiff("s", lastBuilt, Now) > CACHE_SECONDS Then
-        Set cachedProviders = BuildProvidersFromOneDriveSettings()
-        lastBuilt = Now
+    If useDatabase Then
+        If cachedProvidersWithDb Is Nothing _
+           Or rebuildCache _
+           Or DateDiff("s", lastBuiltWithDb, Now) > CACHE_SECONDS Then
+            Set cachedProvidersWithDb = BuildProvidersFromOneDriveSettings(True)
+            lastBuiltWithDb = Now
+        End If
+
+        Set GetProviderCache = cachedProvidersWithDb
+    Else
+        If cachedProvidersLight Is Nothing _
+           Or rebuildCache _
+           Or DateDiff("s", lastBuiltLight, Now) > CACHE_SECONDS Then
+            Set cachedProvidersLight = BuildProvidersFromOneDriveSettings(False)
+            lastBuiltLight = Now
+        End If
+
+        Set GetProviderCache = cachedProvidersLight
     End If
-
-    Set GetProviderCache = cachedProviders
 End Function
 
-Private Function BuildProvidersFromOneDriveSettings() As Collection
+Private Function BuildProvidersFromOneDriveSettings(Optional ByVal useDatabase As Boolean = True) As Collection
     Dim providers As New Collection
 
     Dim settingsRoot As String
@@ -222,7 +264,7 @@ Private Function BuildProvidersFromOneDriveSettings() As Collection
 
     Dim account As Variant
     For Each account In accountFolders
-        ReadAccountProviders providers, CStr(account(0)), CStr(account(1))
+        ReadAccountProviders providers, CStr(account(0)), CStr(account(1)), useDatabase
     Next account
 
     Set BuildProvidersFromOneDriveSettings = providers
@@ -247,7 +289,8 @@ Private Function GetOneDriveAccountFolders(ByVal settingsRoot As String) As Coll
     Set GetOneDriveAccountFolders = result
 End Function
 
-Private Sub AddSettingsDebugRows(ByVal rows As Collection)
+Private Sub AddSettingsDebugRows(ByVal rows As Collection, _
+                                 ByVal useDatabase As Boolean)
     Dim settingsRoot As String
     settingsRoot = CombinePath(Environ$("LOCALAPPDATA"), "Microsoft\OneDrive\settings")
 
@@ -261,13 +304,14 @@ Private Sub AddSettingsDebugRows(ByVal rows As Collection)
 
     Dim account As Variant
     For Each account In accountFolders
-        AddAccountDebugRows rows, CStr(account(0)), CStr(account(1))
+        AddAccountDebugRows rows, CStr(account(0)), CStr(account(1)), useDatabase
     Next account
 End Sub
 
 Private Sub AddAccountDebugRows(ByVal rows As Collection, _
                                 ByVal accountFolder As String, _
-                                ByVal accountName As String)
+                                ByVal accountName As String, _
+                                ByVal useDatabase As Boolean)
     On Error GoTo Failed
 
     Dim stage As String
@@ -322,13 +366,17 @@ Private Sub AddAccountDebugRows(ByVal rows As Collection, _
     AddDebugRow rows, stage, "SyncEngineDatabase.db exists", CStr(FileExists(dbPath))
 
     Dim dbFolders As New Collection
-    If FileExists(dbPath) Then
+    If useDatabase And FileExists(dbPath) Then
         ReadFoldersFromDb dbPath, dbFolders, LCase$(accountName) = "personal"
     End If
-    AddDebugRow rows, stage, "SyncEngineDatabase.db folder count", CStr(dbFolders.Count)
+    If useDatabase Then
+        AddDebugRow rows, stage, "SyncEngineDatabase.db folder count", CStr(dbFolders.Count)
+    Else
+        AddDebugRow rows, stage, "SyncEngineDatabase.db folder count", "skipped"
+    End If
 
     Dim accountProviders As New Collection
-    ReadAccountProviders accountProviders, accountFolder, accountName
+    ReadAccountProviders accountProviders, accountFolder, accountName, useDatabase
     AddDebugRow rows, stage, "Provider count from account", CStr(accountProviders.Count)
 
     Exit Sub
@@ -435,7 +483,8 @@ End Sub
 
 Private Sub ReadAccountProviders(ByVal providers As Collection, _
                                  ByVal accountFolder As String, _
-                                 ByVal accountName As String)
+                                 ByVal accountName As String, _
+                                 Optional ByVal useDatabase As Boolean = True)
     On Error GoTo Done
 
     If Not FolderExists(accountFolder) Then Exit Sub
@@ -454,7 +503,7 @@ Private Sub ReadAccountProviders(ByVal providers As Collection, _
     If Not FileExists(cidIniPath) Then Exit Sub
 
     Dim folders As Collection
-    Set folders = ReadOneDriveFolderMap(accountFolder, cid, accountName)
+    Set folders = ReadOneDriveFolderMap(accountFolder, cid, accountName, useDatabase)
 
     If LCase$(accountName) = "personal" Then
         ReadPersonalProviders providers, accountFolder, cid, policies, folders
@@ -939,7 +988,8 @@ End Sub
 
 Private Function ReadOneDriveFolderMap(ByVal accountFolder As String, _
                                        ByVal cid As String, _
-                                       ByVal accountName As String) As Collection
+                                       ByVal accountName As String, _
+                                       Optional ByVal useDatabase As Boolean = True) As Collection
     Dim folders As New Collection
 
     Dim datPath As String
@@ -948,7 +998,7 @@ Private Function ReadOneDriveFolderMap(ByVal accountFolder As String, _
         ReadFoldersFromDat datPath, folders
     End If
 
-    If folders.Count = 0 Then
+    If useDatabase And folders.Count = 0 Then
         ReadFoldersFromDb CombinePath(accountFolder, "SyncEngineDatabase.db"), _
                           folders, LCase$(accountName) = "personal"
     End If
