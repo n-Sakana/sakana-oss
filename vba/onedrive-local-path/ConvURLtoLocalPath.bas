@@ -57,6 +57,48 @@ Fail:
     If returnInputOnFail Then convURLtoLocalPath = originalPath
 End Function
 
+Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
+                                   Optional ByVal writeToSheet As Boolean = True)
+    Dim rows As New Collection
+    Dim inputPath As String
+
+    If IsMissing(source) Then
+        inputPath = GetInputPath(ThisWorkbook)
+    Else
+        inputPath = GetInputPath(source)
+    End If
+
+    AddDebugRow rows, "Input", "Resolved input", inputPath
+    AddDebugRow rows, "Input", "ThisWorkbook.Path", SafeWorkbookProperty("Path")
+    AddDebugRow rows, "Input", "ThisWorkbook.FullName", SafeWorkbookProperty("FullName")
+    AddDebugRow rows, "Input", "Is HTTPS URL", CStr(IsHttpsUrl(inputPath))
+
+    Dim normalizedUrl As String
+    If IsHttpsUrl(inputPath) Then
+        normalizedUrl = NormalizeUrl(inputPath)
+        AddDebugRow rows, "Input", "Normalized URL", normalizedUrl
+    End If
+
+    AddSettingsDebugRows rows
+
+    Dim providers As Collection
+    Set providers = BuildProvidersFromOneDriveSettings()
+    AddDebugRow rows, "Providers", "Total providers", CStr(providers.Count)
+    AddProviderDebugRows rows, providers, normalizedUrl
+
+    If Len(normalizedUrl) > 0 Then
+        AddDebugRow rows, "Resolve", "requireExists=True", _
+                    ResolveWithProviders(normalizedUrl, providers, True)
+        AddDebugRow rows, "Resolve", "requireExists=False", _
+                    ResolveWithProviders(normalizedUrl, providers, False)
+        AddDebugRow rows, "Resolve", "Public function result", _
+                    convURLtoLocalPath(inputPath, True, False, True)
+    End If
+
+    PrintDebugRows rows
+    If writeToSheet Then WriteDebugRowsToSheet rows
+End Sub
+
 Private Function GetInputPath(ByVal source As Variant) As String
     On Error GoTo FromValue
 
@@ -74,6 +116,65 @@ FromValue:
     GetInputPath = CStr(source)
     On Error GoTo 0
 End Function
+
+Private Function SafeWorkbookProperty(ByVal propertyName As String) As String
+    On Error GoTo Done
+    SafeWorkbookProperty = CStr(CallByName(ThisWorkbook, propertyName, VbGet))
+Done:
+End Function
+
+Private Sub AddDebugRow(ByVal rows As Collection, _
+                        ByVal stage As String, _
+                        ByVal key As String, _
+                        ByVal value As String, _
+                        Optional ByVal note As String = vbNullString)
+    rows.Add Array(stage, key, value, note)
+End Sub
+
+Private Sub PrintDebugRows(ByVal rows As Collection)
+    Dim row As Variant
+    For Each row In rows
+        Debug.Print CStr(row(0)) & " | " & CStr(row(1)) & _
+                    " | " & CStr(row(2)) & " | " & CStr(row(3))
+    Next row
+End Sub
+
+Private Sub WriteDebugRowsToSheet(ByVal rows As Collection)
+    On Error GoTo Done
+
+    Const sheetName As String = "OneDrive Path Debug"
+
+    Dim ws As Object
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo Done
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        ws.Name = sheetName
+    Else
+        ws.Cells.Clear
+    End If
+
+    ws.Cells(1, 1).Value = "Stage"
+    ws.Cells(1, 2).Value = "Key"
+    ws.Cells(1, 3).Value = "Value"
+    ws.Cells(1, 4).Value = "Note"
+
+    Dim i As Long
+    Dim row As Variant
+    For i = 1 To rows.Count
+        row = rows(i)
+        ws.Cells(i + 1, 1).Value = CStr(row(0))
+        ws.Cells(i + 1, 2).Value = CStr(row(1))
+        ws.Cells(i + 1, 3).Value = CStr(row(2))
+        ws.Cells(i + 1, 4).Value = CStr(row(3))
+    Next i
+
+    ws.Columns("A:D").AutoFit
+
+Done:
+End Sub
 
 Private Function GetProviderCache(ByVal rebuildCache As Boolean) As Collection
     Static cachedProviders As Collection
@@ -128,6 +229,186 @@ Private Function GetOneDriveAccountFolders(ByVal settingsRoot As String) As Coll
 
     Set GetOneDriveAccountFolders = result
 End Function
+
+Private Sub AddSettingsDebugRows(ByVal rows As Collection)
+    Dim settingsRoot As String
+    settingsRoot = CombinePath(Environ$("LOCALAPPDATA"), "Microsoft\OneDrive\settings")
+
+    AddDebugRow rows, "Settings", "Root", settingsRoot
+    AddDebugRow rows, "Settings", "Root exists", CStr(FolderExists(settingsRoot))
+    If Not FolderExists(settingsRoot) Then Exit Sub
+
+    Dim accountFolders As Collection
+    Set accountFolders = GetOneDriveAccountFolders(settingsRoot)
+    AddDebugRow rows, "Settings", "Account folder count", CStr(accountFolders.Count)
+
+    Dim account As Variant
+    For Each account In accountFolders
+        AddAccountDebugRows rows, CStr(account(0)), CStr(account(1))
+    Next account
+End Sub
+
+Private Sub AddAccountDebugRows(ByVal rows As Collection, _
+                                ByVal accountFolder As String, _
+                                ByVal accountName As String)
+    On Error GoTo Failed
+
+    Dim stage As String
+    stage = "Account " & accountName
+
+    AddDebugRow rows, stage, "Folder", accountFolder
+    AddDebugRow rows, stage, "Folder exists", CStr(FolderExists(accountFolder))
+
+    Dim globalPath As String
+    globalPath = CombinePath(accountFolder, "global.ini")
+    AddDebugRow rows, stage, "global.ini exists", CStr(FileExists(globalPath))
+
+    Dim cid As String
+    cid = IniValue(globalPath, "cid")
+    AddDebugRow rows, stage, "cid", cid
+    If Len(cid) = 0 Then Exit Sub
+
+    Dim cidIniPath As String
+    cidIniPath = CombinePath(accountFolder, cid & ".ini")
+    AddDebugRow rows, stage, "<cid>.ini exists", CStr(FileExists(cidIniPath))
+    If FileExists(cidIniPath) Then AddCidIniDebugRows rows, stage, cidIniPath
+
+    Dim policies As Collection
+    Set policies = ReadClientPolicies(accountFolder)
+    AddDebugRow rows, stage, "ClientPolicy count", CStr(policies.Count)
+
+    Dim policy As Variant
+    For Each policy In policies
+        AddDebugRow rows, stage & " ClientPolicy", CStr(policy(0)), _
+                    "DavUrlNamespace=" & CStr(policy(1)) & _
+                    " | SiteID=" & CStr(policy(2)) & _
+                    " | WebID=" & CStr(policy(3)) & _
+                    " | IrmLibraryId=" & CStr(policy(4))
+    Next policy
+
+    Dim datPath As String
+    datPath = CombinePath(accountFolder, cid & ".dat")
+    AddDebugRow rows, stage, "<cid>.dat exists", CStr(FileExists(datPath))
+
+    Dim datFolders As New Collection
+    If FileExists(datPath) Then ReadFoldersFromDat datPath, datFolders
+    AddDebugRow rows, stage, "<cid>.dat folder count", CStr(datFolders.Count)
+
+    Dim dbPath As String
+    dbPath = CombinePath(accountFolder, "SyncEngineDatabase.db")
+    AddDebugRow rows, stage, "SyncEngineDatabase.db exists", CStr(FileExists(dbPath))
+
+    Dim dbFolders As New Collection
+    If FileExists(dbPath) Then
+        ReadFoldersFromDb dbPath, dbFolders, LCase$(accountName) = "personal"
+    End If
+    AddDebugRow rows, stage, "SyncEngineDatabase.db folder count", CStr(dbFolders.Count)
+
+    Dim accountProviders As New Collection
+    ReadAccountProviders accountProviders, accountFolder, accountName
+    AddDebugRow rows, stage, "Provider count from account", CStr(accountProviders.Count)
+
+    Exit Sub
+
+Failed:
+    AddDebugRow rows, stage, "ERROR", Err.Number & ": " & Err.Description
+End Sub
+
+Private Sub AddCidIniDebugRows(ByVal rows As Collection, _
+                               ByVal stage As String, _
+                               ByVal cidIniPath As String)
+    On Error GoTo Failed
+
+    Dim iniText As String
+    iniText = ReadTextFile(cidIniPath)
+    AddDebugRow rows, stage, "<cid>.ini text length", CStr(Len(iniText))
+    If Len(iniText) = 0 Then Exit Sub
+
+    Dim sortedLines As Collection
+    Set sortedLines = SortedOneDriveSettingLines(iniText)
+    AddDebugRow rows, stage, "<cid>.ini tracked line count", CStr(sortedLines.Count)
+
+    Dim lineText As Variant
+    Dim tokens As Variant
+    Dim index As Long
+    Dim tagName As String
+
+    For Each lineText In sortedLines
+        index = index + 1
+        tokens = ParseSettingLine(CStr(lineText))
+        tagName = TokenAt(tokens, 0)
+
+        Select Case tagName
+            Case "libraryScope"
+                AddDebugRow rows, stage & " cid.ini", _
+                            tagName & " #" & CStr(index), _
+                            "libNo=" & TokenAt(tokens, 2) & _
+                            " | siteId=" & TokenAt(tokens, 10) & _
+                            " | webId=" & TokenAt(tokens, 11) & _
+                            " | libId=" & TokenAt(tokens, 12) & _
+                            " | localRoot=" & TokenAt(tokens, 14) & _
+                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 14)))
+
+            Case "libraryFolder"
+                AddDebugRow rows, stage & " cid.ini", _
+                            tagName & " #" & CStr(index), _
+                            "libNo=" & TokenAt(tokens, 3) & _
+                            " | folderId=" & TokenAt(tokens, 4) & _
+                            " | localRoot=" & TokenAt(tokens, 6) & _
+                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 6)))
+
+            Case "AddedScope"
+                AddDebugRow rows, stage & " cid.ini", _
+                            tagName & " #" & CStr(index), _
+                            "folderId=" & TokenAt(tokens, 3) & _
+                            " | siteId=" & TokenAt(tokens, 7) & _
+                            " | webId=" & TokenAt(tokens, 8) & _
+                            " | libId=" & TokenAt(tokens, 9) & _
+                            " | linkId=" & TokenAt(tokens, 10) & _
+                            " | relPath=" & TokenAt(tokens, 11)
+        End Select
+    Next lineText
+
+    Exit Sub
+
+Failed:
+    AddDebugRow rows, stage, "<cid>.ini parse ERROR", _
+                Err.Number & ": " & Err.Description
+End Sub
+
+Private Sub AddProviderDebugRows(ByVal rows As Collection, _
+                                 ByVal providers As Collection, _
+                                 ByVal normalizedUrl As String)
+    If providers Is Nothing Then Exit Sub
+
+    Dim item As Variant
+    Dim index As Long
+    Dim localRoot As String
+    Dim webRoot As String
+    Dim relPart As String
+    Dim candidate As String
+    Dim isMatch As Boolean
+
+    For Each item In providers
+        index = index + 1
+        localRoot = CStr(item(0))
+        webRoot = CStr(item(1))
+        isMatch = Len(normalizedUrl) > 0 And UrlStartsWith(normalizedUrl, webRoot)
+
+        AddDebugRow rows, "Provider " & CStr(index), "webRoot", webRoot, _
+                    "matches input=" & CStr(isMatch)
+        AddDebugRow rows, "Provider " & CStr(index), "localRoot", localRoot, _
+                    "exists=" & CStr(FolderExists(localRoot))
+
+        If isMatch Then
+            relPart = Mid$(normalizedUrl, Len(webRoot) + 1)
+            relPart = Replace(relPart, "/", PATH_SEP)
+            candidate = CombinePath(localRoot, relPart)
+            AddDebugRow rows, "Provider " & CStr(index), "candidate", candidate, _
+                        "exists=" & CStr(PathExists(candidate))
+        End If
+    Next item
+End Sub
 
 Private Sub ReadAccountProviders(ByVal providers As Collection, _
                                  ByVal accountFolder As String, _

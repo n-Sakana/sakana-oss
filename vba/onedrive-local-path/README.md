@@ -27,6 +27,30 @@ filePath = convURLtoLocalPath(ThisWorkbook.FullName)
 folderPath = convURLtoLocalPath(ThisWorkbook, returnInputOnFail:=False)
 ```
 
+## 診断ログ
+
+変換できない場合や、成功/失敗の条件差を調べたい場合は次を実行します。
+
+```vb
+convURLtoLocalPathDebug ThisWorkbook
+```
+
+Immediate ウィンドウと `OneDrive Path Debug` シートに、次の情報を出力します。
+
+- `ThisWorkbook.Path` / `ThisWorkbook.FullName`
+- `%LOCALAPPDATA%\Microsoft\OneDrive\settings\` の検出結果
+- `Business#` / `Personal` フォルダごとの `cid`
+- `ClientPolicy*.ini` の `DavUrlNamespace` / `SiteID` / `WebID` / `IrmLibraryId`
+- `<cid>.dat` と `SyncEngineDatabase.db` から取得できたフォルダ件数
+- 生成された `webRoot -> localRoot` 対応表
+- 入力URLに一致した `webRoot`、候補ローカルパス、存在確認結果
+
+シート出力が不要な場合は次のようにします。
+
+```vb
+convURLtoLocalPathDebug ThisWorkbook, False
+```
+
 ## デモ
 
 `Demo_OneDrivePathIssue.bas` は報告・説明用のデモモジュールです。`ConvURLtoLocalPath.bas` と一緒にインポートして、次のマクロを実行します。
