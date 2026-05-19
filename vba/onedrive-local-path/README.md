@@ -80,6 +80,7 @@ convURLtoLocalPath(ThisWorkbook)
 - 外部通信はしません。
 - ファイルやレジストリへの書き込みはしません。
 - OneDrive の settings ファイルを `Open ... For Binary Access Read` で読み取ります。
+- `global.ini` の `cid` が空の場合は、同じアカウントフォルダ内の `.ini` を調べ、`libraryScope` 等を含むGUID形式の設定ファイルを `<cid>.ini` として扱います。
 
 参照する主な場所は次です。
 

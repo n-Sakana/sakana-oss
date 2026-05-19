@@ -280,8 +280,14 @@ Private Sub AddAccountDebugRows(ByVal rows As Collection, _
     globalPath = CombinePath(accountFolder, "global.ini")
     AddDebugRow rows, stage, "global.ini exists", CStr(FileExists(globalPath))
 
+    Dim cidSource As String
+    Dim globalCid As String
+    globalCid = IniValue(globalPath, "cid")
+    AddDebugRow rows, stage, "global.ini cid", globalCid
+
     Dim cid As String
-    cid = IniValue(globalPath, "cid")
+    cid = ResolveAccountIniId(accountFolder, cidSource)
+    AddDebugRow rows, stage, "cid source", cidSource
     AddDebugRow rows, stage, "cid", cid
     If Len(cid) = 0 Then Exit Sub
 
@@ -435,7 +441,8 @@ Private Sub ReadAccountProviders(ByVal providers As Collection, _
     If Not FolderExists(accountFolder) Then Exit Sub
 
     Dim cid As String
-    cid = IniValue(CombinePath(accountFolder, "global.ini"), "cid")
+    Dim cidSource As String
+    cid = ResolveAccountIniId(accountFolder, cidSource)
     If Len(cid) = 0 Then Exit Sub
 
     Dim policies As Collection
@@ -457,6 +464,76 @@ Private Sub ReadAccountProviders(ByVal providers As Collection, _
 
 Done:
 End Sub
+
+Private Function ResolveAccountIniId(ByVal accountFolder As String, _
+                                     ByRef cidSource As String) As String
+    Dim globalCid As String
+    globalCid = IniValue(CombinePath(accountFolder, "global.ini"), "cid")
+
+    If Len(globalCid) > 0 Then
+        cidSource = "global.ini"
+        ResolveAccountIniId = globalCid
+        If FileExists(CombinePath(accountFolder, globalCid & ".ini")) Then Exit Function
+        cidSource = "global.ini, but <cid>.ini missing; fallback .ini scan"
+    Else
+        cidSource = "fallback .ini scan"
+    End If
+
+    Dim fallbackCid As String
+    fallbackCid = FindAccountIniId(accountFolder)
+    If Len(fallbackCid) > 0 Then
+        ResolveAccountIniId = fallbackCid
+        Exit Function
+    End If
+
+    If Len(globalCid) > 0 Then ResolveAccountIniId = globalCid
+End Function
+
+Private Function FindAccountIniId(ByVal accountFolder As String) As String
+    Dim candidates As New Collection
+
+    Dim fileName As String
+    fileName = Dir(CombinePath(accountFolder, "*.ini"))
+
+    Do While Len(fileName) > 0
+        If IsCandidateAccountIniFile(fileName) Then
+            candidates.Add fileName
+        End If
+
+        fileName = Dir
+    Loop
+
+    Dim item As Variant
+    For Each item In candidates
+        Dim fileText As String
+        fileText = ReadTextFile(CombinePath(accountFolder, CStr(item)))
+
+        If LooksLikeAccountIniText(fileText) Then
+            FindAccountIniId = Left$(CStr(item), Len(CStr(item)) - 4)
+            Exit Function
+        End If
+    Next item
+End Function
+
+Private Function IsCandidateAccountIniFile(ByVal fileName As String) As Boolean
+    Dim lowerName As String
+    lowerName = LCase$(fileName)
+
+    If lowerName = "global.ini" Then Exit Function
+    If lowerName = "groupfolders.ini" Then Exit Function
+    If lowerName Like "clientpolicy*.ini" Then Exit Function
+    If lowerName Like "loguploadersettings*.ini" Then Exit Function
+
+    IsCandidateAccountIniFile = (Right$(lowerName, 4) = ".ini")
+End Function
+
+Private Function LooksLikeAccountIniText(ByVal fileText As String) As Boolean
+    LooksLikeAccountIniText = _
+        InStr(1, fileText, "libraryScope = ", vbBinaryCompare) > 0 _
+        Or InStr(1, fileText, "libraryFolder = ", vbBinaryCompare) > 0 _
+        Or InStr(1, fileText, "AddedScope = ", vbBinaryCompare) > 0 _
+        Or InStr(1, fileText, "library = ", vbBinaryCompare) > 0
+End Function
 
 Private Sub ReadPersonalProviders(ByVal providers As Collection, _
                                   ByVal accountFolder As String, _
