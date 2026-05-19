@@ -477,6 +477,7 @@ Private Sub AddProviderDebugRows(ByVal rows As Collection, _
     Dim webRoot As String
     Dim relPart As String
     Dim candidate As String
+    Dim reducedCandidate As String
     Dim isMatch As Boolean
 
     For Each item In providers
@@ -494,8 +495,14 @@ Private Sub AddProviderDebugRows(ByVal rows As Collection, _
             relPart = Mid$(normalizedUrl, Len(webRoot) + 1)
             relPart = Replace(relPart, "/", PATH_SEP)
             candidate = CombinePath(localRoot, relPart)
+            reducedCandidate = CandidateWithoutFirstPathSegment(localRoot, relPart)
             AddDebugRow rows, "Provider " & CStr(index), "candidate", candidate, _
                         "exists=" & CStr(PathExists(candidate))
+            If Len(reducedCandidate) > 0 Then
+                AddDebugRow rows, "Provider " & CStr(index), _
+                            "candidate without first segment", reducedCandidate, _
+                            "exists=" & CStr(PathExists(reducedCandidate))
+            End If
         End If
     Next item
 End Sub
@@ -1423,6 +1430,7 @@ Private Function ResolveWithProviders(ByVal normalizedUrl As String, _
     Dim webRoot As String
     Dim relPart As String
     Dim candidate As String
+    Dim reducedCandidate As String
     Dim fallback As String
 
     For Each item In providers
@@ -1433,13 +1441,25 @@ Private Function ResolveWithProviders(ByVal normalizedUrl As String, _
             relPart = Mid$(normalizedUrl, Len(webRoot) + 1)
             relPart = Replace(relPart, "/", PATH_SEP)
             candidate = CombinePath(localRoot, relPart)
+            reducedCandidate = CandidateWithoutFirstPathSegment(localRoot, relPart)
 
-            If Not requireExists Or PathExists(candidate) Then
+            If PathExists(candidate) Then
                 ResolveWithProviders = candidate
                 Exit Function
             End If
 
-            If Len(fallback) = 0 Then fallback = candidate
+            If Len(reducedCandidate) > 0 And PathExists(reducedCandidate) Then
+                ResolveWithProviders = reducedCandidate
+                Exit Function
+            End If
+
+            If Len(fallback) = 0 Then
+                If Len(reducedCandidate) > 0 Then
+                    fallback = reducedCandidate
+                Else
+                    fallback = candidate
+                End If
+            End If
         End If
     Next item
 
@@ -1741,6 +1761,25 @@ Private Function CombinePath(ByVal basePath As String, ByVal childPath As String
     Else
         CombinePath = basePath & PATH_SEP & childPath
     End If
+End Function
+
+Private Function CandidateWithoutFirstPathSegment(ByVal localRoot As String, _
+                                                  ByVal relPath As String) As String
+    Dim reducedRelPath As String
+    reducedRelPath = PathWithoutFirstSegment(relPath)
+    If Len(reducedRelPath) = 0 Then Exit Function
+
+    CandidateWithoutFirstPathSegment = CombinePath(localRoot, reducedRelPath)
+End Function
+
+Private Function PathWithoutFirstSegment(ByVal value As String) As String
+    value = TrimLeadingBackslash(value)
+
+    Dim separatorPos As Long
+    separatorPos = InStr(1, value, PATH_SEP, vbBinaryCompare)
+    If separatorPos = 0 Then Exit Function
+
+    PathWithoutFirstSegment = Mid$(value, separatorPos + 1)
 End Function
 
 Private Function CombineUrl(ByVal baseUrl As String, ByVal childUrl As String) As String
