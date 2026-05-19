@@ -40,6 +40,11 @@ Public Function convURLtoLocalPath(ByVal source As Variant, _
     Dim resolvedPath As String
     resolvedPath = ResolveWithProviders(NormalizeUrl(originalPath), providers, requireExists)
 
+    If Len(resolvedPath) = 0 And Not rebuildCache Then
+        Set providers = GetProviderCache(True)
+        resolvedPath = ResolveWithProviders(NormalizeUrl(originalPath), providers, requireExists)
+    End If
+
     If Len(resolvedPath) > 0 Then
         convURLtoLocalPath = resolvedPath
     ElseIf returnInputOnFail Then
@@ -94,6 +99,20 @@ Private Function BuildProvidersFromOneDriveSettings() As Collection
         Exit Function
     End If
 
+    Dim accountFolders As Collection
+    Set accountFolders = GetOneDriveAccountFolders(settingsRoot)
+
+    Dim account As Variant
+    For Each account In accountFolders
+        ReadAccountProviders providers, CStr(account(0)), CStr(account(1))
+    Next account
+
+    Set BuildProvidersFromOneDriveSettings = providers
+End Function
+
+Private Function GetOneDriveAccountFolders(ByVal settingsRoot As String) As Collection
+    Dim result As New Collection
+
     Dim folderName As String
     folderName = Dir(CombinePath(settingsRoot, "*"), vbDirectory)
 
@@ -101,13 +120,13 @@ Private Function BuildProvidersFromOneDriveSettings() As Collection
         If folderName <> "." And folderName <> ".." Then
             If LCase$(folderName) = "personal" _
                Or LCase$(Left$(folderName, 8)) = "business" Then
-                ReadAccountProviders providers, CombinePath(settingsRoot, folderName), folderName
+                result.Add Array(CombinePath(settingsRoot, folderName), folderName)
             End If
         End If
         folderName = Dir
     Loop
 
-    Set BuildProvidersFromOneDriveSettings = providers
+    Set GetOneDriveAccountFolders = result
 End Function
 
 Private Sub ReadAccountProviders(ByVal providers As Collection, _
@@ -352,29 +371,43 @@ End Sub
 
 Private Function ReadClientPolicies(ByVal accountFolder As String) As Collection
     Dim result As New Collection
-    Dim fileName As String
-    fileName = Dir(CombinePath(accountFolder, "ClientPolicy*.ini"))
 
-    Do While Len(fileName) > 0
+    Dim policyFiles As Collection
+    Set policyFiles = GetClientPolicyFiles(accountFolder)
+
+    Dim fileName As Variant
+    For Each fileName In policyFiles
         Dim text As String
-        text = ReadTextFile(CombinePath(accountFolder, fileName))
+        text = ReadTextFile(CombinePath(accountFolder, CStr(fileName)))
 
         If Len(text) > 0 Then
             Dim policy As Variant
-            policy = Array(fileName, _
+            policy = Array(CStr(fileName), _
                            Trim$(GetTagValue(text, "DavUrlNamespace = ")), _
                            Trim$(GetTagValue(text, "SiteID = ")), _
                            Trim$(GetTagValue(text, "WebID = ")), _
                            Trim$(GetTagValue(text, "IrmLibraryId = ")))
             On Error Resume Next
-            result.Add policy, LCase$(fileName)
+            result.Add policy, LCase$(CStr(fileName))
             On Error GoTo 0
         End If
+    Next fileName
 
+    Set ReadClientPolicies = result
+End Function
+
+Private Function GetClientPolicyFiles(ByVal accountFolder As String) As Collection
+    Dim result As New Collection
+
+    Dim fileName As String
+    fileName = Dir(CombinePath(accountFolder, "ClientPolicy*.ini"))
+
+    Do While Len(fileName) > 0
+        result.Add fileName
         fileName = Dir
     Loop
 
-    Set ReadClientPolicies = result
+    Set GetClientPolicyFiles = result
 End Function
 
 Private Function PolicyValueByFile(ByVal policies As Collection, _
