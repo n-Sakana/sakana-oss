@@ -60,6 +60,8 @@ End Function
 Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
                                    Optional ByVal writeToSheet As Boolean = True)
     Dim rows As New Collection
+    On Error GoTo Failed
+
     Dim inputPath As String
 
     If IsMissing(source) Then
@@ -95,8 +97,23 @@ Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
                     convURLtoLocalPath(inputPath, True, False, True)
     End If
 
+    GoTo Done
+
+Failed:
+    AddDebugRow rows, "Debug", "ERROR", Err.Number & ": " & Err.Description
+
+Done:
+    On Error Resume Next
     PrintDebugRows rows
     If writeToSheet Then WriteDebugRowsToSheet rows
+    On Error GoTo 0
+End Sub
+
+Public Sub DebugThisWorkbookLocalPath()
+    convURLtoLocalPathDebug ThisWorkbook, True
+    MsgBox "Diagnostic log was written." & vbCrLf & _
+           "Sheet: OneDrive Path Debug" & vbCrLf & _
+           "Immediate: press Ctrl+G in the VBE", vbInformation
 End Sub
 
 Private Function GetInputPath(ByVal source As Variant) As String

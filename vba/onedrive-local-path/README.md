@@ -32,10 +32,10 @@ folderPath = convURLtoLocalPath(ThisWorkbook, returnInputOnFail:=False)
 変換できない場合や、成功/失敗の条件差を調べたい場合は次を実行します。
 
 ```vb
-convURLtoLocalPathDebug ThisWorkbook
+DebugThisWorkbookLocalPath
 ```
 
-Immediate ウィンドウと `OneDrive Path Debug` シートに、次の情報を出力します。
+これは `Alt + F8` のマクロ一覧から実行できる引数なしの診断マクロです。Immediate ウィンドウと `OneDrive Path Debug` シートに、次の情報を出力します。
 
 - `ThisWorkbook.Path` / `ThisWorkbook.FullName`
 - `%LOCALAPPDATA%\Microsoft\OneDrive\settings\` の検出結果
@@ -50,6 +50,8 @@ Immediate ウィンドウと `OneDrive Path Debug` シートに、次の情報�
 ```vb
 convURLtoLocalPathDebug ThisWorkbook, False
 ```
+
+`convURLtoLocalPathDebug` は引数付きのため、Excel のマクロ一覧には表示されない場合があります。
 
 ## デモ
 
