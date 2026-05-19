@@ -27,6 +27,25 @@ filePath = convURLtoLocalPath(ThisWorkbook.FullName)
 folderPath = convURLtoLocalPath(ThisWorkbook, returnInputOnFail:=False)
 ```
 
+## デモ
+
+`Demo_OneDrivePathIssue.bas` は報告・説明用のデモモジュールです。`ConvURLtoLocalPath.bas` と一緒にインポートして、次のマクロを実行します。
+
+```vb
+Demo_PathIssue_Compare
+```
+
+実行すると `Path Demo` シートを作成し、次の2ケースを横並びで比較します。
+
+```text
+Raw ThisWorkbook.Path
+convURLtoLocalPath(ThisWorkbook)
+```
+
+各ケースで、ブックと同じ場所に `_vba_path_demo\path-demo.txt` を作成しようとします。SharePoint / OneDrive URL として開かれている場合、通常の `ThisWorkbook.Path` 側は FSO / Dir で失敗し、`convURLtoLocalPath(ThisWorkbook)` 側はローカル同期パスへ解決できれば成功します。
+
+動画や画面共有では、`ThisWorkbook.Path` が `https://...` になっていること、FSO処理の失敗、変換後パスでの成功を同じシート上で見せられます。
+
 ## 方針
 
 - Win32 API `Declare` は使いません。
