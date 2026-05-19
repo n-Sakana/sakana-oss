@@ -853,14 +853,21 @@ Private Function SortedOneDriveSettingLines(ByVal iniText As String) As Collecti
         Dim i As Long
         Do While bucket.Count > 0
             Dim value As String
+            value = vbNullString
+
             On Error Resume Next
             value = CStr(bucket(CStr(i)))
+            If Err.Number <> 0 Then Err.Clear
             On Error GoTo 0
 
             If Len(value) > 0 Then
                 result.Add value
+                On Error Resume Next
                 bucket.Remove CStr(i)
+                If Err.Number <> 0 Then Err.Clear
+                On Error GoTo 0
             End If
+
             i = i + 1
             If i > 10000 Then Exit Do
         Loop
