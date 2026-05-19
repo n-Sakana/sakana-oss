@@ -4,7 +4,7 @@ Excel VBA で `ThisWorkbook.Path` が SharePoint / OneDrive の URL を返す場
 
 ## 使い方
 
-`ConvURLtoLocalPath.bas` を VBA プロジェクトへインポートします。公開関数は `convURLtoLocalPath` です。
+`ConvURLtoLocalPath.bas` を VBA プロジェクトへインポートします。通常は `convURLtoLocalPath` を使います。
 
 ```vb
 Dim basePath As String
@@ -27,10 +27,16 @@ filePath = convURLtoLocalPath(ThisWorkbook.FullName)
 folderPath = convURLtoLocalPath(ThisWorkbook, returnInputOnFail:=False)
 ```
 
-`SyncEngineDatabase.db` を読まない軽量版もあります。SharePoint / OneDrive URL とローカル同期パスの対応が `<cid>.ini` / `ClientPolicy*.ini` だけで作れる環境では、こちらの方が速く動きます。
+`convURLtoLocalPath` は既定で `SyncEngineDatabase.db` を読みません。明示的に同じ挙動を呼びたい場合は、別名の軽量版も使えます。
 
 ```vb
 folderPath = convURLtoLocalPathLight(ThisWorkbook, returnInputOnFail:=False)
+```
+
+`SyncEngineDatabase.db` も読む旧経路を使いたい場合は、明示的に次を使います。
+
+```vb
+folderPath = convURLtoLocalPathWithDb(ThisWorkbook, returnInputOnFail:=False)
 ```
 
 ## 診断ログ
@@ -59,10 +65,10 @@ convURLtoLocalPathDebug ThisWorkbook, False
 
 `convURLtoLocalPathDebug` は引数付きのため、Excel のマクロ一覧には表示されない場合があります。
 
-`SyncEngineDatabase.db` を読まない軽量診断は、`Alt + F8` から次を実行します。
+`DebugThisWorkbookLocalPath` は既定で `SyncEngineDatabase.db` を読みません。DBも読む診断が必要な場合は、`Alt + F8` から次を実行します。
 
 ```vb
-DebugThisWorkbookLocalPathLight
+DebugThisWorkbookLocalPathWithDb
 ```
 
 ## デモ
@@ -123,7 +129,7 @@ Personal\SyncEngineDatabase.db
 
 `.dat` からフォルダ対応を取得できない場合は、`SyncEngineDatabase.db` も読み取ります。SQLite API や外部DLLは使わず、VBAのバイナリ読み取りだけで必要なフォルダID、親ID、フォルダ名を抽出します。
 
-`convURLtoLocalPathLight` と `DebugThisWorkbookLocalPathLight` は `SyncEngineDatabase.db` を読みません。
+`convURLtoLocalPath` / `convURLtoLocalPathLight` / `DebugThisWorkbookLocalPath` / `DebugThisWorkbookLocalPathLight` は `SyncEngineDatabase.db` を読みません。DBも読む場合は `convURLtoLocalPathWithDb` または `DebugThisWorkbookLocalPathWithDb` を使います。
 
 OneDrive クライアントの設定ファイル形式は更新される可能性があります。失敗を許容できない業務処理では、変換結果が URL のままではないことと、対象パスが存在することを呼び出し側で確認してください。
 

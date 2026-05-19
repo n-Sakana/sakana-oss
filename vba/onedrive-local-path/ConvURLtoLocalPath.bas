@@ -25,7 +25,7 @@ Public Function convURLtoLocalPath(ByVal source As Variant, _
                                    Optional ByVal requireExists As Boolean = True) As String
     convURLtoLocalPath = ConvertURLtoLocalPathInternal(source, rebuildCache, _
                                                        returnInputOnFail, _
-                                                       requireExists, True)
+                                                       requireExists, False)
 End Function
 
 Public Function convURLtoLocalPathLight(ByVal source As Variant, _
@@ -35,6 +35,15 @@ Public Function convURLtoLocalPathLight(ByVal source As Variant, _
     convURLtoLocalPathLight = ConvertURLtoLocalPathInternal(source, rebuildCache, _
                                                             returnInputOnFail, _
                                                             requireExists, False)
+End Function
+
+Public Function convURLtoLocalPathWithDb(ByVal source As Variant, _
+                                         Optional ByVal rebuildCache As Boolean = False, _
+                                         Optional ByVal returnInputOnFail As Boolean = True, _
+                                         Optional ByVal requireExists As Boolean = True) As String
+    convURLtoLocalPathWithDb = ConvertURLtoLocalPathInternal(source, rebuildCache, _
+                                                             returnInputOnFail, _
+                                                             requireExists, True)
 End Function
 
 Private Function ConvertURLtoLocalPathInternal(ByVal source As Variant, _
@@ -78,7 +87,7 @@ End Function
 
 Public Sub convURLtoLocalPathDebug(Optional ByVal source As Variant, _
                                    Optional ByVal writeToSheet As Boolean = True, _
-                                   Optional ByVal useDatabase As Boolean = True)
+                                   Optional ByVal useDatabase As Boolean = False)
     Dim rows As New Collection
     On Error GoTo Failed
 
@@ -131,7 +140,7 @@ Done:
 End Sub
 
 Public Sub DebugThisWorkbookLocalPath()
-    convURLtoLocalPathDebug ThisWorkbook, True
+    convURLtoLocalPathDebug ThisWorkbook, True, False
     MsgBox "Diagnostic log was written." & vbCrLf & _
            "Sheet: OneDrive Path Debug" & vbCrLf & _
            "Immediate: press Ctrl+G in the VBE", vbInformation
@@ -140,6 +149,13 @@ End Sub
 Public Sub DebugThisWorkbookLocalPathLight()
     convURLtoLocalPathDebug ThisWorkbook, True, False
     MsgBox "Light diagnostic log was written." & vbCrLf & _
+           "Sheet: OneDrive Path Debug" & vbCrLf & _
+           "Immediate: press Ctrl+G in the VBE", vbInformation
+End Sub
+
+Public Sub DebugThisWorkbookLocalPathWithDb()
+    convURLtoLocalPathDebug ThisWorkbook, True, True
+    MsgBox "DB diagnostic log was written." & vbCrLf & _
            "Sheet: OneDrive Path Debug" & vbCrLf & _
            "Immediate: press Ctrl+G in the VBE", vbInformation
 End Sub
