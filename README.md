@@ -6,6 +6,7 @@
 
 - `notes/` — 学習メモ・技術整理ノート
   - [`dataverse-stack-overview.md`](notes/dataverse-stack-overview.md) — Web通信プロトコルから Microsoft Power Platform / Dataverse までの通し整理
+- `vba/onedrive-local-path/` — SharePoint / OneDrive URL をVBAでローカル同期パスへ変換する単一モジュール
 
 各アプリケーションのクリーンアップ版ソースも順次追加予定。
 
