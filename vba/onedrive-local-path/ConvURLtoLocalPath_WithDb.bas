@@ -1,13 +1,13 @@
-Attribute VB_Name = "modConvURLtoLocalPath"
+Attribute VB_Name = "modConvURLtoLocalPathWithDb"
 Option Explicit
 
 ' Converts a SharePoint/OneDrive URL returned by Workbook.Path into a local
 ' OneDrive sync path, without Win32 API declarations or shell automation.
 '
 ' Public entry point:
-'     localPath = convURLtoLocalPath(ThisWorkbook)
-'     localPath = convURLtoLocalPath(ThisWorkbook.Path)
-'     localPath = convURLtoLocalPath(ThisWorkbook.FullName)
+'     localPath = convURLtoLocalPathWithDb(ThisWorkbook)
+'     localPath = convURLtoLocalPathWithDb(ThisWorkbook.Path)
+'     localPath = convURLtoLocalPathWithDb(ThisWorkbook.FullName)
 '
 ' Notes:
 ' - Passing a Workbook-like object resolves its Path property.
@@ -19,28 +19,20 @@ Option Explicit
 Private Const CACHE_SECONDS As Long = 30
 Private Const PATH_SEP As String = "\"
 
-Public Function convURLtoLocalPath(ByVal source As Variant, _
-                                   Optional ByVal rebuildCache As Boolean = False, _
-                                   Optional ByVal returnInputOnFail As Boolean = True, _
-                                   Optional ByVal requireExists As Boolean = True) As String
-    convURLtoLocalPath = ConvertURLtoLocalPathInternal(source, rebuildCache, _
-                                                       returnInputOnFail, _
-                                                       requireExists)
-End Function
-
-Public Function convURLtoLocalPathLight(ByVal source As Variant, _
-                                        Optional ByVal rebuildCache As Boolean = False, _
-                                        Optional ByVal returnInputOnFail As Boolean = True, _
-                                        Optional ByVal requireExists As Boolean = True) As String
-    convURLtoLocalPathLight = ConvertURLtoLocalPathInternal(source, rebuildCache, _
-                                                            returnInputOnFail, _
-                                                            requireExists)
+Public Function convURLtoLocalPathWithDb(ByVal source As Variant, _
+                                         Optional ByVal rebuildCache As Boolean = False, _
+                                         Optional ByVal returnInputOnFail As Boolean = True, _
+                                         Optional ByVal requireExists As Boolean = True) As String
+    convURLtoLocalPathWithDb = ConvertURLtoLocalPathInternal(source, rebuildCache, _
+                                                             returnInputOnFail, _
+                                                             requireExists, True)
 End Function
 
 Private Function ConvertURLtoLocalPathInternal(ByVal source As Variant, _
                                                ByVal rebuildCache As Boolean, _
                                                ByVal returnInputOnFail As Boolean, _
-                                               ByVal requireExists As Boolean) As String
+                                               ByVal requireExists As Boolean, _
+                                               ByVal useDatabase As Boolean) As String
     Dim originalPath As String
     originalPath = GetInputPath(source)
 
@@ -53,13 +45,13 @@ Private Function ConvertURLtoLocalPathInternal(ByVal source As Variant, _
     On Error GoTo Fail
 
     Dim providers As Collection
-    Set providers = GetProviderCache(rebuildCache)
+    Set providers = GetProviderCache(rebuildCache, useDatabase)
 
     Dim resolvedPath As String
     resolvedPath = ResolveWithProviders(NormalizeUrl(originalPath), providers, requireExists)
 
     If Len(resolvedPath) = 0 And Not rebuildCache Then
-        Set providers = GetProviderCache(True)
+        Set providers = GetProviderCache(True, useDatabase)
         resolvedPath = ResolveWithProviders(NormalizeUrl(originalPath), providers, requireExists)
     End If
 
@@ -74,6 +66,67 @@ Private Function ConvertURLtoLocalPathInternal(ByVal source As Variant, _
 Fail:
     If returnInputOnFail Then ConvertURLtoLocalPathInternal = originalPath
 End Function
+
+Public Sub convURLtoLocalPathWithDbDebug(Optional ByVal source As Variant, _
+                                   Optional ByVal writeToSheet As Boolean = True, _
+                                   Optional ByVal useDatabase As Boolean = True)
+    Dim rows As New Collection
+    On Error GoTo Failed
+
+    Dim inputPath As String
+
+    If IsMissing(source) Then
+        inputPath = GetInputPath(ThisWorkbook)
+    Else
+        inputPath = GetInputPath(source)
+    End If
+
+    AddDebugRow rows, "Input", "Resolved input", inputPath
+    AddDebugRow rows, "Input", "ThisWorkbook.Path", SafeWorkbookProperty("Path")
+    AddDebugRow rows, "Input", "ThisWorkbook.FullName", SafeWorkbookProperty("FullName")
+    AddDebugRow rows, "Input", "Is HTTPS URL", CStr(IsHttpsUrl(inputPath))
+    AddDebugRow rows, "Input", "Use SyncEngineDatabase.db", CStr(useDatabase)
+
+    Dim normalizedUrl As String
+    If IsHttpsUrl(inputPath) Then
+        normalizedUrl = NormalizeUrl(inputPath)
+        AddDebugRow rows, "Input", "Normalized URL", normalizedUrl
+    End If
+
+    AddSettingsDebugRows rows, useDatabase
+
+    Dim providers As Collection
+    Set providers = BuildProvidersFromOneDriveSettings(useDatabase)
+    AddDebugRow rows, "Providers", "Total providers", CStr(providers.Count)
+    AddProviderDebugRows rows, providers, normalizedUrl
+
+    If Len(normalizedUrl) > 0 Then
+        AddDebugRow rows, "Resolve", "requireExists=True", _
+                    ResolveWithProviders(normalizedUrl, providers, True)
+        AddDebugRow rows, "Resolve", "requireExists=False", _
+                    ResolveWithProviders(normalizedUrl, providers, False)
+        AddDebugRow rows, "Resolve", "Public function result", _
+                    ConvertURLtoLocalPathInternal(inputPath, True, False, True, useDatabase)
+    End If
+
+    GoTo Done
+
+Failed:
+    AddDebugRow rows, "Debug", "ERROR", Err.Number & ": " & Err.Description
+
+Done:
+    On Error Resume Next
+    PrintDebugRows rows
+    If writeToSheet Then WriteDebugRowsToSheet rows
+    On Error GoTo 0
+End Sub
+
+Public Sub DebugThisWorkbookLocalPathWithDb()
+    convURLtoLocalPathWithDbDebug ThisWorkbook, True, True
+    MsgBox "DB diagnostic log was written." & vbCrLf & _
+           "Sheet: OneDrive Path Debug" & vbCrLf & _
+           "Immediate: press Ctrl+G in the VBE", vbInformation
+End Sub
 
 Private Function GetInputPath(ByVal source As Variant) As String
     On Error GoTo FromValue
@@ -93,25 +146,94 @@ FromValue:
     On Error GoTo 0
 End Function
 
-Public Function convURLtoLocalPathProviderMap(Optional ByVal rebuildCache As Boolean = False) As Collection
-    Set convURLtoLocalPathProviderMap = GetProviderCache(rebuildCache)
+Private Function SafeWorkbookProperty(ByVal propertyName As String) As String
+    On Error GoTo Done
+    SafeWorkbookProperty = CStr(CallByName(ThisWorkbook, propertyName, VbGet))
+Done:
 End Function
 
-Private Function GetProviderCache(ByVal rebuildCache As Boolean) As Collection
-    Static cachedProviders As Collection
-    Static lastBuilt As Date
+Private Sub AddDebugRow(ByVal rows As Collection, _
+                        ByVal stage As String, _
+                        ByVal key As String, _
+                        ByVal value As String, _
+                        Optional ByVal note As String = vbNullString)
+    rows.Add Array(stage, key, value, note)
+End Sub
 
-    If cachedProviders Is Nothing _
-       Or rebuildCache _
-       Or DateDiff("s", lastBuilt, Now) > CACHE_SECONDS Then
-        Set cachedProviders = BuildProvidersFromOneDriveSettings()
-        lastBuilt = Now
+Private Sub PrintDebugRows(ByVal rows As Collection)
+    Dim row As Variant
+    For Each row In rows
+        Debug.Print CStr(row(0)) & " | " & CStr(row(1)) & _
+                    " | " & CStr(row(2)) & " | " & CStr(row(3))
+    Next row
+End Sub
+
+Private Sub WriteDebugRowsToSheet(ByVal rows As Collection)
+    On Error GoTo Done
+
+    Const sheetName As String = "OneDrive Path Debug"
+
+    Dim ws As Object
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo Done
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        ws.Name = sheetName
+    Else
+        ws.Cells.Clear
     End If
 
-    Set GetProviderCache = cachedProviders
+    ws.Cells(1, 1).Value = "Stage"
+    ws.Cells(1, 2).Value = "Key"
+    ws.Cells(1, 3).Value = "Value"
+    ws.Cells(1, 4).Value = "Note"
+
+    Dim i As Long
+    Dim row As Variant
+    For i = 1 To rows.Count
+        row = rows(i)
+        ws.Cells(i + 1, 1).Value = CStr(row(0))
+        ws.Cells(i + 1, 2).Value = CStr(row(1))
+        ws.Cells(i + 1, 3).Value = CStr(row(2))
+        ws.Cells(i + 1, 4).Value = CStr(row(3))
+    Next i
+
+    ws.Columns("A:D").AutoFit
+
+Done:
+End Sub
+
+Private Function GetProviderCache(ByVal rebuildCache As Boolean, _
+                                  ByVal useDatabase As Boolean) As Collection
+    Static cachedProvidersWithDb As Collection
+    Static cachedProvidersLight As Collection
+    Static lastBuiltWithDb As Date
+    Static lastBuiltLight As Date
+
+    If useDatabase Then
+        If cachedProvidersWithDb Is Nothing _
+           Or rebuildCache _
+           Or DateDiff("s", lastBuiltWithDb, Now) > CACHE_SECONDS Then
+            Set cachedProvidersWithDb = BuildProvidersFromOneDriveSettings(True)
+            lastBuiltWithDb = Now
+        End If
+
+        Set GetProviderCache = cachedProvidersWithDb
+    Else
+        If cachedProvidersLight Is Nothing _
+           Or rebuildCache _
+           Or DateDiff("s", lastBuiltLight, Now) > CACHE_SECONDS Then
+            Set cachedProvidersLight = BuildProvidersFromOneDriveSettings(False)
+            lastBuiltLight = Now
+        End If
+
+        Set GetProviderCache = cachedProvidersLight
+    End If
 End Function
 
-Private Function BuildProvidersFromOneDriveSettings() As Collection
+Private Function BuildProvidersFromOneDriveSettings(Optional ByVal useDatabase As Boolean = True) As Collection
     Dim providers As New Collection
 
     Dim settingsRoot As String
@@ -126,7 +248,7 @@ Private Function BuildProvidersFromOneDriveSettings() As Collection
 
     Dim account As Variant
     For Each account In accountFolders
-        ReadAccountProviders providers, CStr(account(0)), CStr(account(1))
+        ReadAccountProviders providers, CStr(account(0)), CStr(account(1)), useDatabase
     Next account
 
     Set BuildProvidersFromOneDriveSettings = providers
@@ -151,9 +273,212 @@ Private Function GetOneDriveAccountFolders(ByVal settingsRoot As String) As Coll
     Set GetOneDriveAccountFolders = result
 End Function
 
+Private Sub AddSettingsDebugRows(ByVal rows As Collection, _
+                                 ByVal useDatabase As Boolean)
+    Dim settingsRoot As String
+    settingsRoot = CombinePath(Environ$("LOCALAPPDATA"), "Microsoft\OneDrive\settings")
+
+    AddDebugRow rows, "Settings", "Root", settingsRoot
+    AddDebugRow rows, "Settings", "Root exists", CStr(FolderExists(settingsRoot))
+    If Not FolderExists(settingsRoot) Then Exit Sub
+
+    Dim accountFolders As Collection
+    Set accountFolders = GetOneDriveAccountFolders(settingsRoot)
+    AddDebugRow rows, "Settings", "Account folder count", CStr(accountFolders.Count)
+
+    Dim account As Variant
+    For Each account In accountFolders
+        AddAccountDebugRows rows, CStr(account(0)), CStr(account(1)), useDatabase
+    Next account
+End Sub
+
+Private Sub AddAccountDebugRows(ByVal rows As Collection, _
+                                ByVal accountFolder As String, _
+                                ByVal accountName As String, _
+                                ByVal useDatabase As Boolean)
+    On Error GoTo Failed
+
+    Dim stage As String
+    stage = "Account " & accountName
+
+    AddDebugRow rows, stage, "Folder", accountFolder
+    AddDebugRow rows, stage, "Folder exists", CStr(FolderExists(accountFolder))
+
+    Dim globalPath As String
+    globalPath = CombinePath(accountFolder, "global.ini")
+    AddDebugRow rows, stage, "global.ini exists", CStr(FileExists(globalPath))
+
+    Dim cidSource As String
+    Dim globalCid As String
+    globalCid = IniValue(globalPath, "cid")
+    AddDebugRow rows, stage, "global.ini cid", globalCid
+
+    Dim cid As String
+    cid = ResolveAccountIniId(accountFolder, cidSource)
+    AddDebugRow rows, stage, "cid source", cidSource
+    AddDebugRow rows, stage, "cid", cid
+    If Len(cid) = 0 Then Exit Sub
+
+    Dim cidIniPath As String
+    cidIniPath = CombinePath(accountFolder, cid & ".ini")
+    AddDebugRow rows, stage, "<cid>.ini exists", CStr(FileExists(cidIniPath))
+    If FileExists(cidIniPath) Then AddCidIniDebugRows rows, stage, cidIniPath
+
+    Dim policies As Collection
+    Set policies = ReadClientPolicies(accountFolder)
+    AddDebugRow rows, stage, "ClientPolicy count", CStr(policies.Count)
+
+    Dim policy As Variant
+    For Each policy In policies
+        AddDebugRow rows, stage & " ClientPolicy", CStr(policy(0)), _
+                    "DavUrlNamespace=" & CStr(policy(1)) & _
+                    " | SiteID=" & CStr(policy(2)) & _
+                    " | WebID=" & CStr(policy(3)) & _
+                    " | IrmLibraryId=" & CStr(policy(4))
+    Next policy
+
+    Dim datPath As String
+    datPath = CombinePath(accountFolder, cid & ".dat")
+    AddDebugRow rows, stage, "<cid>.dat exists", CStr(FileExists(datPath))
+
+    Dim datFolders As New Collection
+    If FileExists(datPath) Then ReadFoldersFromDat datPath, datFolders
+    AddDebugRow rows, stage, "<cid>.dat folder count", CStr(datFolders.Count)
+
+    Dim dbPath As String
+    dbPath = CombinePath(accountFolder, "SyncEngineDatabase.db")
+    AddDebugRow rows, stage, "SyncEngineDatabase.db exists", CStr(FileExists(dbPath))
+
+    Dim dbFolders As New Collection
+    If useDatabase And FileExists(dbPath) Then
+        ReadFoldersFromDb dbPath, dbFolders, LCase$(accountName) = "personal"
+    End If
+    If useDatabase Then
+        AddDebugRow rows, stage, "SyncEngineDatabase.db folder count", CStr(dbFolders.Count)
+    Else
+        AddDebugRow rows, stage, "SyncEngineDatabase.db folder count", "skipped"
+    End If
+
+    Dim accountProviders As New Collection
+    ReadAccountProviders accountProviders, accountFolder, accountName, useDatabase
+    AddDebugRow rows, stage, "Provider count from account", CStr(accountProviders.Count)
+
+    Exit Sub
+
+Failed:
+    AddDebugRow rows, stage, "ERROR", Err.Number & ": " & Err.Description
+End Sub
+
+Private Sub AddCidIniDebugRows(ByVal rows As Collection, _
+                               ByVal stage As String, _
+                               ByVal cidIniPath As String)
+    On Error GoTo Failed
+
+    Dim iniText As String
+    iniText = ReadTextFile(cidIniPath)
+    AddDebugRow rows, stage, "<cid>.ini text length", CStr(Len(iniText))
+    If Len(iniText) = 0 Then Exit Sub
+
+    Dim sortedLines As Collection
+    Set sortedLines = SortedOneDriveSettingLines(iniText)
+    AddDebugRow rows, stage, "<cid>.ini tracked line count", CStr(sortedLines.Count)
+
+    Dim lineText As Variant
+    Dim tokens As Variant
+    Dim index As Long
+    Dim tagName As String
+
+    For Each lineText In sortedLines
+        index = index + 1
+        tokens = ParseSettingLine(CStr(lineText))
+        tagName = TokenAt(tokens, 0)
+
+        Select Case tagName
+            Case "libraryScope"
+                AddDebugRow rows, stage & " cid.ini", _
+                            tagName & " #" & CStr(index), _
+                            "libNo=" & TokenAt(tokens, 2) & _
+                            " | siteId=" & TokenAt(tokens, 10) & _
+                            " | webId=" & TokenAt(tokens, 11) & _
+                            " | libId=" & TokenAt(tokens, 12) & _
+                            " | localRoot=" & TokenAt(tokens, 14) & _
+                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 14))) & _
+                            " | directUrl=" & DirectUrlFromTokens(tokens)
+
+            Case "libraryFolder"
+                AddDebugRow rows, stage & " cid.ini", _
+                            tagName & " #" & CStr(index), _
+                            "libNo=" & TokenAt(tokens, 3) & _
+                            " | folderId=" & TokenAt(tokens, 4) & _
+                            " | localRoot=" & TokenAt(tokens, 6) & _
+                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 6))) & _
+                            " | directUrl=" & DirectUrlFromTokens(tokens)
+
+            Case "AddedScope"
+                AddDebugRow rows, stage & " cid.ini", _
+                            tagName & " #" & CStr(index), _
+                            "folderId=" & TokenAt(tokens, 3) & _
+                            " | siteId=" & TokenAt(tokens, 7) & _
+                            " | webId=" & TokenAt(tokens, 8) & _
+                            " | libId=" & TokenAt(tokens, 9) & _
+                            " | linkId=" & TokenAt(tokens, 10) & _
+                            " | relPath=" & TokenAt(tokens, 11) & _
+                            " | directUrl=" & DirectUrlFromTokens(tokens)
+        End Select
+    Next lineText
+
+    Exit Sub
+
+Failed:
+    AddDebugRow rows, stage, "<cid>.ini parse ERROR", _
+                Err.Number & ": " & Err.Description
+End Sub
+
+Private Sub AddProviderDebugRows(ByVal rows As Collection, _
+                                 ByVal providers As Collection, _
+                                 ByVal normalizedUrl As String)
+    If providers Is Nothing Then Exit Sub
+
+    Dim item As Variant
+    Dim index As Long
+    Dim localRoot As String
+    Dim webRoot As String
+    Dim relPart As String
+    Dim candidate As String
+    Dim reducedCandidate As String
+    Dim isMatch As Boolean
+
+    For Each item In providers
+        index = index + 1
+        localRoot = CStr(item(0))
+        webRoot = CStr(item(1))
+        isMatch = Len(normalizedUrl) > 0 And UrlStartsWith(normalizedUrl, webRoot)
+
+        AddDebugRow rows, "Provider " & CStr(index), "webRoot", webRoot, _
+                    "matches input=" & CStr(isMatch)
+        AddDebugRow rows, "Provider " & CStr(index), "localRoot", localRoot, _
+                    "exists=" & CStr(FolderExists(localRoot))
+
+        If isMatch Then
+            relPart = Mid$(normalizedUrl, Len(webRoot) + 1)
+            relPart = Replace(relPart, "/", PATH_SEP)
+            candidate = CombinePath(localRoot, relPart)
+            reducedCandidate = CandidateWithoutFirstPathSegment(localRoot, relPart)
+            AddDebugRow rows, "Provider " & CStr(index), "candidate", candidate, _
+                        "exists=" & CStr(PathExists(candidate))
+            If Len(reducedCandidate) > 0 Then
+                AddDebugRow rows, "Provider " & CStr(index), _
+                            "candidate without first segment", reducedCandidate, _
+                            "exists=" & CStr(PathExists(reducedCandidate))
+            End If
+        End If
+    Next item
+End Sub
+
 Private Sub ReadAccountProviders(ByVal providers As Collection, _
                                  ByVal accountFolder As String, _
-                                 ByVal accountName As String)
+                                 ByVal accountName As String, _
+                                 Optional ByVal useDatabase As Boolean = True)
     On Error GoTo Done
 
     If Not FolderExists(accountFolder) Then Exit Sub
@@ -172,7 +497,7 @@ Private Sub ReadAccountProviders(ByVal providers As Collection, _
     If Not FileExists(cidIniPath) Then Exit Sub
 
     Dim folders As Collection
-    Set folders = ReadOneDriveFolderMap(accountFolder, cid)
+    Set folders = ReadOneDriveFolderMap(accountFolder, cid, accountName, useDatabase)
 
     If LCase$(accountName) = "personal" Then
         ReadPersonalProviders providers, accountFolder, cid, policies, folders
@@ -671,13 +996,20 @@ Private Sub AppendToken(ByRef values() As String, ByRef count As Long, ByVal val
 End Sub
 
 Private Function ReadOneDriveFolderMap(ByVal accountFolder As String, _
-                                       ByVal cid As String) As Collection
+                                       ByVal cid As String, _
+                                       ByVal accountName As String, _
+                                       Optional ByVal useDatabase As Boolean = True) As Collection
     Dim folders As New Collection
 
     Dim datPath As String
     datPath = CombinePath(accountFolder, cid & ".dat")
     If FileExists(datPath) Then
         ReadFoldersFromDat datPath, folders
+    End If
+
+    If useDatabase And folders.Count = 0 Then
+        ReadFoldersFromDb CombinePath(accountFolder, "SyncEngineDatabase.db"), _
+                          folders, LCase$(accountName) = "personal"
     End If
 
     Set ReadOneDriveFolderMap = folders
@@ -771,6 +1103,217 @@ CloseFile:
     If fileNo <> 0 Then Close #fileNo
     On Error GoTo 0
 End Sub
+
+Private Sub ReadFoldersFromDb(ByVal filePath As String, _
+                              ByVal folders As Collection, _
+                              ByVal isPersonal As Boolean)
+    On Error GoTo CloseFile
+    If Not FileExists(filePath) Then Exit Sub
+
+    Dim fileNo As Long
+    fileNo = FreeFile
+    Open filePath For Binary Access Read As #fileNo
+
+    Dim fileSize As Long
+    fileSize = LOF(fileNo)
+    If fileSize = 0 Then GoTo CloseFile
+
+    Const chunkSize As Long = &H100000
+    Const minName As Long = 15
+    Const maxSigByte As Byte = 9
+    Const maxHeader As Long = 21
+    Const minIdSize As Long = 12
+    Const maxIdSize As Long = 48
+    Const minThreeIdSizes As Long = minIdSize * 3
+    Const maxThreeIdSizes As Long = maxIdSize * 3
+    Const leadingBuffer As Long = maxHeader + maxThreeIdSizes
+    Const headBytesOffset As Long = 15
+    Const bangCode As Long = 33
+
+    Dim curlyStart As String
+    Dim quoteByte As String
+    Dim bangByte As String
+    curlyStart = ChrW$(&H7B22)
+    quoteByte = ChrB$(&H22)
+    bangByte = ChrB$(bangCode)
+
+    Dim signature As String
+    Dim idPattern As String
+    idPattern = Replace(Space$(12), " ", "[a-fA-F0-9]")
+
+    If isPersonal Then
+        signature = bangByte
+        idPattern = "*" & idPattern & "![a-fA-F0-9]*"
+    Else
+        signature = curlyStart
+        idPattern = idPattern & "*"
+    End If
+
+    Dim bytes(1 To chunkSize) As Byte
+    Dim buffer As String
+    Dim lastRecord As Long
+    Dim i As Long
+    Dim j As Long
+    Dim k As Long
+    Dim idSize(1 To 4) As Long
+    Dim nameSize As Long
+    Dim nameStart As Long
+    Dim nameEnd As Long
+    Dim folderId As String
+    Dim parentId As String
+    Dim tempId As String
+    Dim folderName As String
+
+    lastRecord = 1
+    Do
+        Get #fileNo, lastRecord, bytes
+        buffer = bytes
+
+        i = InStrB(1, buffer, signature)
+        Do While i > 0
+            If isPersonal Then
+                For j = i - 1 To i - maxIdSize Step -1
+                    If j = 0 Then GoTo NextSignature
+                    If bytes(j) < bangCode Then Exit For
+                Next j
+                If j < maxHeader Or i - j < minIdSize Then GoTo NextSignature
+            Else
+                j = InStrB(i + 2, buffer, quoteByte)
+                If j = 0 Then Exit Do
+
+                idSize(4) = j - i + 1
+                If idSize(4) > maxIdSize Then GoTo NextSignature
+
+                For j = i - 1 To i - maxThreeIdSizes Step -1
+                    If j = 0 Then GoTo NextSignature
+                    If bytes(j) < bangCode Then Exit For
+                Next j
+                If j < maxHeader Then GoTo NextSignature
+
+                idSize(1) = i - j - 1
+                If idSize(1) < minThreeIdSizes Then GoTo NextSignature
+            End If
+
+            k = j + 1
+            For j = j To j - headBytesOffset + 1 Step -1
+                If bytes(j) > maxSigByte Then GoTo NextSignature
+            Next j
+
+            If j <= 4 Then GoTo NextSignature
+            If bytes(j) <= maxSigByte And bytes(j - 1) < &H80 Then j = j - 1
+            If j <= 4 Then GoTo NextSignature
+            If bytes(j) < minName Then j = j - 1
+            If j <= 4 Then GoTo NextSignature
+            If bytes(j) < minName Then j = j - 1
+            If j <= 4 Then GoTo NextSignature
+
+            nameSize = bytes(j)
+            If nameSize Mod 2 = 0 Then GoTo NextSignature
+
+            nameSize = (nameSize - 13) / 2
+            If bytes(j - 1) > &H7F Then
+                nameSize = (bytes(j - 1) - &H80) * &H40 + nameSize
+                j = j - 1
+            End If
+            If j < 5 Then GoTo NextSignature
+            If nameSize < 1 Or bytes(j - 4) = 0 Then GoTo NextSignature
+
+            If isPersonal Then
+                idSize(4) = (bytes(j - 1) - 13) / 2
+                idSize(3) = (bytes(j - 2) - 13) / 2
+                idSize(2) = (bytes(j - 3) - 13) / 2
+                idSize(1) = (bytes(j - 4) - 13) / 2
+                nameStart = k + idSize(1) + idSize(2) + idSize(3) + idSize(4)
+            Else
+                If bytes(j - 1) <> idSize(4) * 2 + 13 Then GoTo NextSignature
+                idSize(3) = (bytes(j - 2) - 13) / 2
+                idSize(2) = (bytes(j - 3) - 13) / 2
+                idSize(1) = idSize(1) - idSize(2) - idSize(3)
+                nameStart = i + idSize(4)
+            End If
+
+            For j = 1 To 4
+                If idSize(j) < minIdSize Or idSize(j) > maxIdSize Then GoTo NextSignature
+            Next j
+
+            nameEnd = nameStart + nameSize - 1
+            If nameEnd > chunkSize Then Exit Do
+
+            folderId = BinaryAnsiToString(MidB$(buffer, k, idSize(1)))
+            If Not folderId Like idPattern Then GoTo NextSignature
+
+            k = k + idSize(1)
+            parentId = BinaryAnsiToString(MidB$(buffer, k, idSize(2)))
+            If Not parentId Like idPattern Then GoTo NextSignature
+
+            If isPersonal Then
+                k = k + idSize(2)
+                tempId = BinaryAnsiToString(MidB$(buffer, k, idSize(3)))
+                If Not tempId Like idPattern Then GoTo NextSignature
+
+                tempId = BinaryAnsiToString(MidB$(buffer, k + idSize(3), idSize(4)))
+                If Not tempId Like idPattern Then GoTo NextSignature
+            End If
+
+            folderName = DecodeDbFolderName(buffer, bytes, nameStart, nameSize)
+            AddFolder folders, folderId, parentId, folderName
+            i = nameEnd
+
+NextSignature:
+            i = InStrB(i + 1, buffer, signature)
+        Loop
+
+        If i = 0 Then
+            lastRecord = lastRecord + chunkSize - leadingBuffer
+        ElseIf i > leadingBuffer Then
+            lastRecord = lastRecord + i - leadingBuffer
+        Else
+            lastRecord = lastRecord + i
+        End If
+    Loop Until lastRecord > fileSize
+
+CloseFile:
+    On Error Resume Next
+    If fileNo <> 0 Then Close #fileNo
+    On Error GoTo 0
+End Sub
+
+Private Function DecodeDbFolderName(ByVal buffer As String, _
+                                    ByRef sourceBytes() As Byte, _
+                                    ByVal startByte As Long, _
+                                    ByVal byteCount As Long) As String
+    Dim raw As String
+    raw = MidB$(buffer, startByte, byteCount)
+
+    Dim i As Long
+    For i = startByte To startByte + byteCount - 1
+        If sourceBytes(i) > &H7F Then
+            DecodeDbFolderName = Utf8BinaryStringToString(raw)
+            Exit Function
+        End If
+    Next i
+
+    DecodeDbFolderName = BinaryAnsiToString(raw)
+End Function
+
+Private Function BinaryAnsiToString(ByVal value As String) As String
+    If LenB(value) = 0 Then Exit Function
+    BinaryAnsiToString = StrConv(value, vbUnicode)
+End Function
+
+Private Function Utf8BinaryStringToString(ByVal value As String) As String
+    If LenB(value) = 0 Then Exit Function
+
+    Dim bytes() As Byte
+    ReDim bytes(0 To LenB(value) - 1)
+
+    Dim i As Long
+    For i = 1 To LenB(value)
+        bytes(i - 1) = AscB(MidB$(value, i, 1))
+    Next i
+
+    Utf8BinaryStringToString = Utf8BytesToString(bytes)
+End Function
 
 Private Sub AddFolder(ByVal folders As Collection, _
                       ByVal dirId As String, _
