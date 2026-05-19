@@ -418,7 +418,8 @@ Private Sub AddCidIniDebugRows(ByVal rows As Collection, _
                             " | webId=" & TokenAt(tokens, 11) & _
                             " | libId=" & TokenAt(tokens, 12) & _
                             " | localRoot=" & TokenAt(tokens, 14) & _
-                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 14)))
+                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 14))) & _
+                            " | directUrl=" & DirectUrlFromTokens(tokens)
 
             Case "libraryFolder"
                 AddDebugRow rows, stage & " cid.ini", _
@@ -426,7 +427,8 @@ Private Sub AddCidIniDebugRows(ByVal rows As Collection, _
                             "libNo=" & TokenAt(tokens, 3) & _
                             " | folderId=" & TokenAt(tokens, 4) & _
                             " | localRoot=" & TokenAt(tokens, 6) & _
-                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 6)))
+                            " | localLooks=" & CStr(LooksLikeLocalPath(TokenAt(tokens, 6))) & _
+                            " | directUrl=" & DirectUrlFromTokens(tokens)
 
             Case "AddedScope"
                 AddDebugRow rows, stage & " cid.ini", _
@@ -436,7 +438,8 @@ Private Sub AddCidIniDebugRows(ByVal rows As Collection, _
                             " | webId=" & TokenAt(tokens, 8) & _
                             " | libId=" & TokenAt(tokens, 9) & _
                             " | linkId=" & TokenAt(tokens, 10) & _
-                            " | relPath=" & TokenAt(tokens, 11)
+                            " | relPath=" & TokenAt(tokens, 11) & _
+                            " | directUrl=" & DirectUrlFromTokens(tokens)
         End Select
     Next lineText
 
@@ -716,7 +719,11 @@ Private Sub ProcessBusinessLibraryScope(ByVal providers As Collection, _
     webId = TokenAt(tokens, 11)
     libId = TokenAt(tokens, 12)
 
-    If libNo = "0" Then
+    webRoot = DirectUrlFromTokens(tokens)
+
+    If Len(webRoot) > 0 Then
+        If Len(localRoot) > 0 And Len(mainLocalRoot) = 0 Then mainLocalRoot = localRoot
+    ElseIf libNo = "0" Then
         webRoot = PolicyValueByFile(policies, "ClientPolicy.ini", "DavUrlNamespace")
         If Len(localRoot) > 0 Then mainLocalRoot = localRoot
     Else
@@ -743,13 +750,19 @@ Private Sub ProcessBusinessLibraryFolder(ByVal providers As Collection, _
     If Len(localRoot) = 0 Then Exit Sub
 
     Dim webRoot As String
-    webRoot = KeyedValue(libToWebRoot, TokenAt(tokens, 3))
+    webRoot = DirectUrlFromTokens(tokens)
+    Dim hasDirectUrl As Boolean
+    hasDirectUrl = Len(webRoot) > 0
+
+    If Len(webRoot) = 0 Then webRoot = KeyedValue(libToWebRoot, TokenAt(tokens, 3))
     If Len(webRoot) = 0 Then Exit Sub
 
     Dim remoteFolder As String
     remoteFolder = FolderPathForId(folders, CleanFolderId(TokenAt(tokens, 4)), "/")
 
-    If Len(remoteFolder) > 0 Then
+    If hasDirectUrl Then
+        AddProvider providers, localRoot, webRoot
+    ElseIf Len(remoteFolder) > 0 Then
         AddProvider providers, localRoot, CombineUrl(webRoot, remoteFolder)
     Else
         AddProvider providers, localRoot, CombineUrl(webRoot, LastPathPart(localRoot))
@@ -777,17 +790,22 @@ Private Sub ProcessBusinessAddedScope(ByVal providers As Collection, _
     relPath = TokenAt(tokens, 11)
     If relPath = " " Then relPath = vbNullString
 
-    webRoot = PolicyValueByFile(policies, _
+    webRoot = DirectUrlFromTokens(tokens)
+    Dim hasDirectUrl As Boolean
+    hasDirectUrl = Len(webRoot) > 0
+
+    If Len(webRoot) = 0 Then webRoot = PolicyValueByFile(policies, _
               "ClientPolicy_" & libId & siteId & linkId & ".ini", "DavUrlNamespace")
     If Len(webRoot) = 0 Then
         webRoot = PolicyValueByIds(policies, siteId, webId, libId, "DavUrlNamespace")
     End If
     If Len(webRoot) = 0 Then Exit Sub
 
-    If Len(relPath) > 0 Then webRoot = CombineUrl(webRoot, relPath)
+    If Not hasDirectUrl And Len(relPath) > 0 Then webRoot = CombineUrl(webRoot, relPath)
 
     Dim localRelPath As String
     localRelPath = FolderPathForId(folders, CleanFolderId(TokenAt(tokens, 3)), PATH_SEP)
+    If Len(localRelPath) = 0 Then localRelPath = RelativePathFromToken(TokenAt(tokens, 11), PATH_SEP)
     If Len(localRelPath) = 0 Then Exit Sub
 
     AddProvider providers, CombinePath(mainLocalRoot, localRelPath), webRoot
@@ -1518,6 +1536,46 @@ Private Function FirstLocalPath(ByVal tokens As Variant) As String
         End If
     Next i
 Done:
+End Function
+
+Private Function FirstHttpsUrl(ByVal tokens As Variant) As String
+    On Error GoTo Done
+    Dim i As Long
+    For i = LBound(tokens) To UBound(tokens)
+        If IsHttpsUrl(CStr(tokens(i))) Then
+            FirstHttpsUrl = CStr(tokens(i))
+            Exit Function
+        End If
+    Next i
+Done:
+End Function
+
+Private Function DirectUrlFromTokens(ByVal tokens As Variant) As String
+    Dim tagName As String
+    tagName = TokenAt(tokens, 0)
+
+    Select Case tagName
+        Case "libraryScope"
+            DirectUrlFromTokens = TokenAt(tokens, 8)
+        Case "AddedScope"
+            DirectUrlFromTokens = TokenAt(tokens, 5)
+        Case Else
+            DirectUrlFromTokens = FirstHttpsUrl(tokens)
+    End Select
+
+    If Not IsHttpsUrl(DirectUrlFromTokens) Then _
+        DirectUrlFromTokens = FirstHttpsUrl(tokens)
+End Function
+
+Private Function RelativePathFromToken(ByVal value As String, _
+                                       ByVal separator As String) As String
+    value = Trim$(value)
+    If Len(value) = 0 Or value = " " Then Exit Function
+    If IsHttpsUrl(value) Then Exit Function
+
+    value = Replace(value, "/", separator)
+    If separator = PATH_SEP Then value = TrimLeadingBackslash(value)
+    RelativePathFromToken = value
 End Function
 
 Private Function LooksLikeLocalPath(ByVal value As String) As Boolean
