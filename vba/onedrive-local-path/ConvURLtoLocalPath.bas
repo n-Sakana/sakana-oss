@@ -149,7 +149,7 @@ Private Sub ReadAccountProviders(ByVal providers As Collection, _
     If Not FileExists(cidIniPath) Then Exit Sub
 
     Dim folders As Collection
-    Set folders = ReadOneDriveFolderMap(accountFolder, cid)
+    Set folders = ReadOneDriveFolderMap(accountFolder, cid, accountName)
 
     If LCase$(accountName) = "personal" Then
         ReadPersonalProviders providers, accountFolder, cid, policies, folders
@@ -497,16 +497,14 @@ End Function
 Private Function SortKeyFromLine(ByVal lineText As String) As String
     Dim tokens As Variant
     tokens = ParseSettingLine(lineText)
-    SortKeyFromLine = TokenAt(tokens, 1)
+    If TokenAt(tokens, 1) = "=" Then
+        SortKeyFromLine = TokenAt(tokens, 2)
+    Else
+        SortKeyFromLine = TokenAt(tokens, 1)
+    End If
 End Function
 
 Private Function ParseSettingLine(ByVal lineText As String) As Variant
-    Dim p As Long
-    p = InStr(1, lineText, "=", vbBinaryCompare)
-    If p > 0 Then
-        lineText = Trim$(Left$(lineText, p - 1)) & " " & Trim$(Mid$(lineText, p + 1))
-    End If
-
     Dim values() As String
     ReDim values(0 To 0)
 
@@ -557,13 +555,20 @@ Private Sub AppendToken(ByRef values() As String, ByRef count As Long, ByVal val
     count = count + 1
 End Sub
 
-Private Function ReadOneDriveFolderMap(ByVal accountFolder As String, ByVal cid As String) As Collection
+Private Function ReadOneDriveFolderMap(ByVal accountFolder As String, _
+                                       ByVal cid As String, _
+                                       ByVal accountName As String) As Collection
     Dim folders As New Collection
 
     Dim datPath As String
     datPath = CombinePath(accountFolder, cid & ".dat")
     If FileExists(datPath) Then
         ReadFoldersFromDat datPath, folders
+    End If
+
+    If folders.Count = 0 Then
+        ReadFoldersFromDb CombinePath(accountFolder, "SyncEngineDatabase.db"), _
+                          folders, LCase$(accountName) = "personal"
     End If
 
     Set ReadOneDriveFolderMap = folders
@@ -657,6 +662,217 @@ CloseFile:
     If fileNo <> 0 Then Close #fileNo
     On Error GoTo 0
 End Sub
+
+Private Sub ReadFoldersFromDb(ByVal filePath As String, _
+                              ByVal folders As Collection, _
+                              ByVal isPersonal As Boolean)
+    On Error GoTo CloseFile
+    If Not FileExists(filePath) Then Exit Sub
+
+    Dim fileNo As Long
+    fileNo = FreeFile
+    Open filePath For Binary Access Read As #fileNo
+
+    Dim fileSize As Long
+    fileSize = LOF(fileNo)
+    If fileSize = 0 Then GoTo CloseFile
+
+    Const chunkSize As Long = &H100000
+    Const minName As Long = 15
+    Const maxSigByte As Byte = 9
+    Const maxHeader As Long = 21
+    Const minIdSize As Long = 12
+    Const maxIdSize As Long = 48
+    Const minThreeIdSizes As Long = minIdSize * 3
+    Const maxThreeIdSizes As Long = maxIdSize * 3
+    Const leadingBuffer As Long = maxHeader + maxThreeIdSizes
+    Const headBytesOffset As Long = 15
+    Const bangCode As Long = 33
+
+    Dim curlyStart As String
+    Dim quoteByte As String
+    Dim bangByte As String
+    curlyStart = ChrW$(&H7B22)
+    quoteByte = ChrB$(&H22)
+    bangByte = ChrB$(bangCode)
+
+    Dim signature As String
+    Dim idPattern As String
+    idPattern = Replace(Space$(12), " ", "[a-fA-F0-9]")
+
+    If isPersonal Then
+        signature = bangByte
+        idPattern = "*" & idPattern & "![a-fA-F0-9]*"
+    Else
+        signature = curlyStart
+        idPattern = idPattern & "*"
+    End If
+
+    Dim bytes(1 To chunkSize) As Byte
+    Dim buffer As String
+    Dim lastRecord As Long
+    Dim i As Long
+    Dim j As Long
+    Dim k As Long
+    Dim idSize(1 To 4) As Long
+    Dim nameSize As Long
+    Dim nameStart As Long
+    Dim nameEnd As Long
+    Dim folderId As String
+    Dim parentId As String
+    Dim tempId As String
+    Dim folderName As String
+
+    lastRecord = 1
+    Do
+        Get #fileNo, lastRecord, bytes
+        buffer = bytes
+
+        i = InStrB(1, buffer, signature)
+        Do While i > 0
+            If isPersonal Then
+                For j = i - 1 To i - maxIdSize Step -1
+                    If j = 0 Then GoTo NextSignature
+                    If bytes(j) < bangCode Then Exit For
+                Next j
+                If j < maxHeader Or i - j < minIdSize Then GoTo NextSignature
+            Else
+                j = InStrB(i + 2, buffer, quoteByte)
+                If j = 0 Then Exit Do
+
+                idSize(4) = j - i + 1
+                If idSize(4) > maxIdSize Then GoTo NextSignature
+
+                For j = i - 1 To i - maxThreeIdSizes Step -1
+                    If j = 0 Then GoTo NextSignature
+                    If bytes(j) < bangCode Then Exit For
+                Next j
+                If j < maxHeader Then GoTo NextSignature
+
+                idSize(1) = i - j - 1
+                If idSize(1) < minThreeIdSizes Then GoTo NextSignature
+            End If
+
+            k = j + 1
+            For j = j To j - headBytesOffset + 1 Step -1
+                If bytes(j) > maxSigByte Then GoTo NextSignature
+            Next j
+
+            If j <= 4 Then GoTo NextSignature
+            If bytes(j) <= maxSigByte And bytes(j - 1) < &H80 Then j = j - 1
+            If j <= 4 Then GoTo NextSignature
+            If bytes(j) < minName Then j = j - 1
+            If j <= 4 Then GoTo NextSignature
+            If bytes(j) < minName Then j = j - 1
+            If j <= 4 Then GoTo NextSignature
+
+            nameSize = bytes(j)
+            If nameSize Mod 2 = 0 Then GoTo NextSignature
+
+            nameSize = (nameSize - 13) / 2
+            If bytes(j - 1) > &H7F Then
+                nameSize = (bytes(j - 1) - &H80) * &H40 + nameSize
+                j = j - 1
+            End If
+            If j < 5 Then GoTo NextSignature
+            If nameSize < 1 Or bytes(j - 4) = 0 Then GoTo NextSignature
+
+            If isPersonal Then
+                idSize(4) = (bytes(j - 1) - 13) / 2
+                idSize(3) = (bytes(j - 2) - 13) / 2
+                idSize(2) = (bytes(j - 3) - 13) / 2
+                idSize(1) = (bytes(j - 4) - 13) / 2
+                nameStart = k + idSize(1) + idSize(2) + idSize(3) + idSize(4)
+            Else
+                If bytes(j - 1) <> idSize(4) * 2 + 13 Then GoTo NextSignature
+                idSize(3) = (bytes(j - 2) - 13) / 2
+                idSize(2) = (bytes(j - 3) - 13) / 2
+                idSize(1) = idSize(1) - idSize(2) - idSize(3)
+                nameStart = i + idSize(4)
+            End If
+
+            For j = 1 To 4
+                If idSize(j) < minIdSize Or idSize(j) > maxIdSize Then GoTo NextSignature
+            Next j
+
+            nameEnd = nameStart + nameSize - 1
+            If nameEnd > chunkSize Then Exit Do
+
+            folderId = BinaryAnsiToString(MidB$(buffer, k, idSize(1)))
+            If Not folderId Like idPattern Then GoTo NextSignature
+
+            k = k + idSize(1)
+            parentId = BinaryAnsiToString(MidB$(buffer, k, idSize(2)))
+            If Not parentId Like idPattern Then GoTo NextSignature
+
+            If isPersonal Then
+                k = k + idSize(2)
+                tempId = BinaryAnsiToString(MidB$(buffer, k, idSize(3)))
+                If Not tempId Like idPattern Then GoTo NextSignature
+
+                tempId = BinaryAnsiToString(MidB$(buffer, k + idSize(3), idSize(4)))
+                If Not tempId Like idPattern Then GoTo NextSignature
+            End If
+
+            folderName = DecodeDbFolderName(buffer, bytes, nameStart, nameSize)
+            AddFolder folders, folderId, parentId, folderName
+            i = nameEnd
+
+NextSignature:
+            i = InStrB(i + 1, buffer, signature)
+        Loop
+
+        If i = 0 Then
+            lastRecord = lastRecord + chunkSize - leadingBuffer
+        ElseIf i > leadingBuffer Then
+            lastRecord = lastRecord + i - leadingBuffer
+        Else
+            lastRecord = lastRecord + i
+        End If
+    Loop Until lastRecord > fileSize
+
+CloseFile:
+    On Error Resume Next
+    If fileNo <> 0 Then Close #fileNo
+    On Error GoTo 0
+End Sub
+
+Private Function DecodeDbFolderName(ByVal buffer As String, _
+                                    ByRef sourceBytes() As Byte, _
+                                    ByVal startByte As Long, _
+                                    ByVal byteCount As Long) As String
+    Dim raw As String
+    raw = MidB$(buffer, startByte, byteCount)
+
+    Dim i As Long
+    For i = startByte To startByte + byteCount - 1
+        If sourceBytes(i) > &H7F Then
+            DecodeDbFolderName = Utf8BinaryStringToString(raw)
+            Exit Function
+        End If
+    Next i
+
+    DecodeDbFolderName = BinaryAnsiToString(raw)
+End Function
+
+Private Function BinaryAnsiToString(ByVal value As String) As String
+    If LenB(value) = 0 Then Exit Function
+    BinaryAnsiToString = StrConv(value, vbUnicode)
+End Function
+
+Private Function Utf8BinaryStringToString(ByVal value As String) As String
+    If LenB(value) = 0 Then Exit Function
+
+    Dim bytes() As Byte
+    ReDim bytes(0 To LenB(value) - 1)
+
+    Dim i As Long
+    For i = 1 To LenB(value)
+        bytes(i - 1) = AscB(MidB$(value, i, 1))
+    Next i
+
+    Utf8BinaryStringToString = Utf8BytesToString(bytes)
+End Function
 
 Private Sub AddFolder(ByVal folders As Collection, _
                       ByVal dirId As String, _

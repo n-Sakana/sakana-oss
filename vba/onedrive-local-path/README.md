@@ -68,20 +68,22 @@ Business#\global.ini
 Business#\<cid>.ini
 Business#\ClientPolicy*.ini
 Business#\<cid>.dat
+Business#\SyncEngineDatabase.db
 Personal\global.ini
 Personal\<cid>.ini
 Personal\ClientPolicy*.ini
 Personal\GroupFolders.ini
 Personal\<cid>.dat
+Personal\SyncEngineDatabase.db
 ```
 
 ## 制約
 
 このモジュールは、実務で使いやすいように安全側へ寄せた軽量実装です。`VBA-FileTools` や Guido Witt-Dörring 氏の Gist の考え方を参考にしていますが、完全移植ではありません。
 
-特に、`SyncEngineDatabase.db` の解析は入れていません。OneDrive の環境によって `.dat` がなく `SyncEngineDatabase.db` のみになる場合、SharePoint のサブフォルダ同期や「OneDrive へのショートカットの追加」の一部は解決できない可能性があります。
+`.dat` からフォルダ対応を取得できない場合は、`SyncEngineDatabase.db` も読み取ります。SQLite API や外部DLLは使わず、VBAのバイナリ読み取りだけで必要なフォルダID、親ID、フォルダ名を抽出します。
 
-失敗を許容できない業務処理では、変換結果が URL のままではないことと、対象パスが存在することを呼び出し側で確認してください。
+OneDrive クライアントの設定ファイル形式は更新される可能性があります。失敗を許容できない業務処理では、変換結果が URL のままではないことと、対象パスが存在することを呼び出し側で確認してください。
 
 ```vb
 Dim p As String
