@@ -69,7 +69,21 @@ ITEMS = [
     ("odaijini", "お大事に", "#159947"),
     ("muri_sezu", "無理せず", "#5B6472"),
     ("fight", "ファイト", "#E23A1A"),
+    ("arigato", "ありがと", "#047857"),
+    ("thx", "thx!", "#2563EB"),
+    ("iizo", "いいぞ！", "#159947"),
+    ("go", "Go‼︎", "#E23A1A"),
+    ("dame_desu", "ダメです", "#B91C1C"),
+    ("okotowari", "お断り", "#374151"),
+    ("hee", "へぇ", "#6D5AE6"),
+    ("kyougaku", "驚愕", "#DB2777"),
 ]
+
+LINE_LAYOUT_TEXTS = {
+    "thx!",
+    "いいぞ！",
+    "Go‼︎",
+}
 
 # Slackの小表示で沈みにくい、濃いめの共通カラーバリエーション。
 # 黄色系は純黄色ではなくゴールド寄りにして、白背景でも読める濃度にする。
@@ -162,6 +176,8 @@ def _grid(text: str, color: str) -> Image.Image:
 
 
 def make_emoji(text: str, color: str) -> Image.Image:
+    if text in LINE_LAYOUT_TEXTS:
+        return _line(text, color)
     if len(text) == 4:
         return _grid(text, color)
     return _line(text, color)

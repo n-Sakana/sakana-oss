@@ -82,6 +82,14 @@ ZIP内のPNGは `png-color/` 配下に入っています。
 - `:odaijini:` — お大事に
 - `:muri_sezu:` — 無理せず
 - `:fight:` — ファイト
+- `:arigato:` — ありがと
+- `:thx:` — thx!
+- `:iizo:` — いいぞ！
+- `:go:` — Go‼︎
+- `:dame_desu:` — ダメです
+- `:okotowari:` — お断り
+- `:hee:` — へぇ
+- `:kyougaku:` — 驚愕
 
 ## Generation
 
