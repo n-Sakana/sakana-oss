@@ -22,13 +22,14 @@ Slack用の文字ベース絵文字セットです。
 ZIP内のPNGは `png-color/` 配下に入っています。
 `generate.py` を実行すると、作業ディレクトリにも同じ `png-color/` が生成されます。
 
-色は Slack の小表示でも沈みにくい濃いめの6色です。
+色は Slack の小表示でも沈みにくい濃いめの7色です。
 
 - `_red`
 - `_orange`
 - `_green`
 - `_blue`
 - `_purple`
+- `_yellow`
 - `_gray`
 
 例:
@@ -37,6 +38,7 @@ ZIP内のPNGは `png-color/` 配下に入っています。
 - `:youkoso_blue:` — ようこそ / blue
 - `:kansha_green:` — 感謝 / green
 - `:majika_purple:` — マジか / purple
+- `:kami_yellow:` — 神 / yellow
 
 ## Files
 
@@ -67,6 +69,19 @@ ZIP内のPNGは `png-color/` 配下に入っています。
 - `:kami:` — 神
 - `:muri:` — 無理
 - `:tsurai:` — つらい
+- `:tasukaru:` — 助かる
+- `:kanmuryou:` — 感無量
+- `:thanks:` — サンクス
+- `:doumo:` — どうも
+- `:wakaru:` — わかる
+- `:tashikani:` — たしかに
+- `:aruaru:` — あるある
+- `:kyoukan:` — 共感
+- `:igi_nashi:` — 異議なし
+- `:ganbare:` — がんばれ
+- `:odaijini:` — お大事に
+- `:muri_sezu:` — 無理せず
+- `:fight:` — ファイト
 
 ## Generation
 
