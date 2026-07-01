@@ -85,6 +85,17 @@ LINE_LAYOUT_TEXTS = {
     "Go‼︎",
 }
 
+# Complex glyphs can collapse when forced into the generic compact logo rules.
+# Keep the rest of the set aggressive, but give these labels custom geometry.
+STACK_2_1_TEXTS = {
+    "感無量",
+}
+
+LINE_OVERRIDES = {
+    # Stroke-based weight makes the dense kanji interiors merge at Slack size.
+    "驚愕": {"font_px": 110, "stroke_px": 0, "target": (126, 108)},
+}
+
 # Slackの小表示で沈みにくい、濃いめの共通カラーバリエーション。
 # 黄色系は純黄色ではなくゴールド寄りにして、白背景でも読める濃度にする。
 COLOR_VARIANTS = [
@@ -175,7 +186,29 @@ def _grid(text: str, color: str) -> Image.Image:
     return canvas.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
 
 
+def _grid_2_1(text: str, color: str) -> Image.Image:
+    top = _resize_exact(_raw_text(text[:2], color, 100, 1), 126, 62)
+    bottom = _resize_exact(_raw_text(text[2:], color, 100, 1), 76, 58)
+    gap = -1 * SCALE
+    total_h = top.height + bottom.height + gap
+    canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    y = (W - total_h) // 2
+    canvas.alpha_composite(top, ((W - top.width) // 2, y))
+    y += top.height + gap
+    canvas.alpha_composite(bottom, ((W - bottom.width) // 2, y))
+    return canvas.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
+
+
 def make_emoji(text: str, color: str) -> Image.Image:
+    if text in STACK_2_1_TEXTS:
+        return _grid_2_1(text, color)
+    if text in LINE_OVERRIDES:
+        override = LINE_OVERRIDES[text]
+        raw = _raw_text(text, color, override["font_px"], override["stroke_px"])
+        part = _resize_exact(raw, *override["target"])
+        canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        _paste_center(canvas, part)
+        return canvas.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
     if text in LINE_LAYOUT_TEXTS:
         return _line(text, color)
     if len(text) == 4:
