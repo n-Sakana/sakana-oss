@@ -12,6 +12,32 @@ Slack用の文字ベース絵文字セットです。
 - 余白は最小化
 - 高解像度で描画してから縮小し、ラスタ消し込みは使わない
 
+## Color variants
+
+同じ文字・同じ配置で、共通色のバリエーションも用意しています。
+
+- `slack-text-reactions-20260701-v2-colors.zip`
+- `preview-colors.png`
+
+ZIP内のPNGは `png-color/` 配下に入っています。
+`generate.py` を実行すると、作業ディレクトリにも同じ `png-color/` が生成されます。
+
+色は Slack の小表示でも沈みにくい濃いめの6色です。
+
+- `_red`
+- `_orange`
+- `_green`
+- `_blue`
+- `_purple`
+- `_gray`
+
+例:
+
+- `:youkoso_red:` — ようこそ / red
+- `:youkoso_blue:` — ようこそ / blue
+- `:kansha_green:` — 感謝 / green
+- `:majika_purple:` — マジか / purple
+
 ## Files
 
 - `:youkoso:` — ようこそ
