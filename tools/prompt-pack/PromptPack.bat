@@ -5,7 +5,7 @@ if /I "%~1"=="--inner" (
     shift
 ) else (
     if /I not "%PROMPTPACK_NO_RELAUNCH%"=="1" (
-        start "PromptPack" "%ComSpec%" /d /k call "%~f0" --inner %*
+        start "PromptPack" /D "%~dp0" "%ComSpec%" /d /k call "%~f0" --inner %*
         exit /b 0
     )
 )
