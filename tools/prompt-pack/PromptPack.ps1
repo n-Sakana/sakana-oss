@@ -126,12 +126,13 @@ public static class PromptPackNativeHelper
         byte[] bytes = File.ReadAllBytes(path);
         Encoding latin = Encoding.GetEncoding(28591);
         string raw = latin.GetString(bytes);
+        List<string> decodedStreams = new List<string>();
         StringBuilder output = new StringBuilder();
         int searchFrom = 0;
 
         while (true)
         {
-            int streamMarker = raw.IndexOf("stream", searchFrom, StringComparison.Ordinal);
+            int streamMarker = FindNextStreamMarker(raw, searchFrom);
             if (streamMarker < 0)
             {
                 break;
@@ -160,30 +161,191 @@ public static class PromptPackNativeHelper
             int dictStart = Math.Max(0, streamMarker - 1200);
             string dictionary = raw.Substring(dictStart, streamMarker - dictStart);
             byte[] streamBytes = Slice(bytes, dataStart, dataEnd - dataStart);
-            streamBytes = TrimTrailingLineEndings(streamBytes);
+            byte[] trimmedStreamBytes = TrimTrailingLineEndings(streamBytes);
 
             byte[] decoded = streamBytes;
             if (dictionary.IndexOf("/FlateDecode", StringComparison.Ordinal) >= 0 ||
                 dictionary.IndexOf("/Fl", StringComparison.Ordinal) >= 0)
             {
                 decoded = TryInflate(streamBytes);
+                if (decoded == null && trimmedStreamBytes.Length != streamBytes.Length)
+                {
+                    decoded = TryInflate(trimmedStreamBytes);
+                }
             }
 
             if (decoded != null && decoded.Length > 0)
             {
-                string content = latin.GetString(decoded);
-                string text = ExtractTextFromContentStream(content);
-                if (!String.IsNullOrWhiteSpace(text))
-                {
-                    output.AppendLine(text.Trim());
-                    output.AppendLine();
-                }
+                decodedStreams.Add(latin.GetString(decoded));
             }
 
-            searchFrom = dataEnd + 9;
+            searchFrom = dataEnd + "endstream".Length;
+        }
+
+        Dictionary<string, string> toUnicodeMap = BuildToUnicodeMap(decodedStreams);
+        foreach (string content in decodedStreams)
+        {
+            string text = ExtractTextFromContentStream(content, toUnicodeMap);
+            if (!String.IsNullOrWhiteSpace(text))
+            {
+                output.AppendLine(text.Trim());
+                output.AppendLine();
+            }
         }
 
         return CleanExtractedText(output.ToString());
+    }
+
+    private static int FindNextStreamMarker(string raw, int start)
+    {
+        int searchFrom = start;
+        while (true)
+        {
+            int marker = raw.IndexOf("stream", searchFrom, StringComparison.Ordinal);
+            if (marker < 0)
+            {
+                return -1;
+            }
+
+            bool insideEndStream = marker >= 3 && String.CompareOrdinal(raw, marker - 3, "end", 0, 3) == 0;
+            if (!insideEndStream)
+            {
+                return marker;
+            }
+
+            searchFrom = marker + 6;
+        }
+    }
+
+    private static Dictionary<string, string> BuildToUnicodeMap(List<string> decodedStreams)
+    {
+        Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string content in decodedStreams)
+        {
+            int searchFrom = 0;
+            while (true)
+            {
+                int begin = content.IndexOf("beginbfchar", searchFrom, StringComparison.Ordinal);
+                if (begin < 0)
+                {
+                    break;
+                }
+
+                int segmentStart = begin + "beginbfchar".Length;
+                int end = content.IndexOf("endbfchar", segmentStart, StringComparison.Ordinal);
+                if (end < 0)
+                {
+                    break;
+                }
+
+                List<string> tokens = ExtractHexTokens(content.Substring(segmentStart, end - segmentStart));
+                for (int i = 0; i + 1 < tokens.Count; i += 2)
+                {
+                    string source = NormalizeHex(tokens[i]);
+                    string destination = DecodeUnicodeHex(tokens[i + 1]);
+                    if (source.Length > 0 && destination.Length > 0 && !map.ContainsKey(source))
+                    {
+                        map.Add(source, destination);
+                    }
+                }
+
+                searchFrom = end + "endbfchar".Length;
+            }
+        }
+
+        return map;
+    }
+
+    private static List<string> ExtractHexTokens(string text)
+    {
+        List<string> tokens = new List<string>();
+        int index = 0;
+        while (index < text.Length)
+        {
+            if (text[index] == '<' && index + 1 < text.Length && text[index + 1] != '<')
+            {
+                StringBuilder hex = new StringBuilder();
+                index++;
+                while (index < text.Length && text[index] != '>')
+                {
+                    if (IsHex(text[index]))
+                    {
+                        hex.Append(text[index]);
+                    }
+                    index++;
+                }
+
+                if (hex.Length > 0)
+                {
+                    tokens.Add(hex.ToString());
+                }
+            }
+            index++;
+        }
+
+        return tokens;
+    }
+
+    private static string NormalizeHex(string hex)
+    {
+        StringBuilder normalized = new StringBuilder();
+        for (int i = 0; i < hex.Length; i++)
+        {
+            if (IsHex(hex[i]))
+            {
+                normalized.Append(Char.ToUpperInvariant(hex[i]));
+            }
+        }
+
+        if ((normalized.Length % 2) == 1)
+        {
+            normalized.Append('0');
+        }
+
+        return normalized.ToString();
+    }
+
+    private static string DecodeUnicodeHex(string hex)
+    {
+        string normalized = NormalizeHex(hex);
+        if (normalized.Length == 0)
+        {
+            return "";
+        }
+
+        if ((normalized.Length % 4) != 0 && (normalized.Length % 2) == 0)
+        {
+            try
+            {
+                byte[] bytes = HexToBytes(normalized);
+                return Encoding.GetEncoding(28591).GetString(bytes);
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        try
+        {
+            byte[] bytes = HexToBytes(normalized);
+            return Encoding.BigEndianUnicode.GetString(bytes);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static byte[] HexToBytes(string hex)
+    {
+        byte[] bytes = new byte[hex.Length / 2];
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+        }
+        return bytes;
     }
 
     private static byte[] Slice(byte[] bytes, int start, int length)
@@ -266,7 +428,7 @@ public static class PromptPackNativeHelper
         }
     }
 
-    private static string ExtractTextFromContentStream(string content)
+    private static string ExtractTextFromContentStream(string content, Dictionary<string, string> toUnicodeMap)
     {
         StringBuilder output = new StringBuilder();
         bool inTextObject = false;
@@ -292,7 +454,7 @@ public static class PromptPackNativeHelper
             if (inTextObject && content[index] == '(')
             {
                 int endIndex;
-                string value = ReadPdfLiteralString(content, index, out endIndex);
+                string value = ReadPdfLiteralString(content, index, toUnicodeMap, out endIndex);
                 if (!String.IsNullOrEmpty(value))
                 {
                     output.Append(value);
@@ -304,7 +466,7 @@ public static class PromptPackNativeHelper
             if (inTextObject && content[index] == '<' && index + 1 < content.Length && content[index + 1] != '<')
             {
                 int endIndex;
-                string value = ReadPdfHexString(content, index, out endIndex);
+                string value = ReadPdfHexString(content, index, toUnicodeMap, out endIndex);
                 if (!String.IsNullOrEmpty(value))
                 {
                     output.Append(value);
@@ -362,7 +524,7 @@ public static class PromptPackNativeHelper
         return Char.IsWhiteSpace(value) || value == '[' || value == ']' || value == '<' || value == '>' || value == '/' || value == '(' || value == ')';
     }
 
-    private static string ReadPdfLiteralString(string text, int start, out int endIndex)
+    private static string ReadPdfLiteralString(string text, int start, Dictionary<string, string> toUnicodeMap, out int endIndex)
     {
         List<byte> bytes = new List<byte>();
         int depth = 1;
@@ -439,10 +601,10 @@ public static class PromptPackNativeHelper
         }
 
         endIndex = index;
-        return DecodePdfBytes(bytes.ToArray());
+        return DecodePdfBytes(bytes.ToArray(), toUnicodeMap);
     }
 
-    private static string ReadPdfHexString(string text, int start, out int endIndex)
+    private static string ReadPdfHexString(string text, int start, Dictionary<string, string> toUnicodeMap, out int endIndex)
     {
         StringBuilder hex = new StringBuilder();
         int index = start + 1;
@@ -476,7 +638,7 @@ public static class PromptPackNativeHelper
         }
 
         endIndex = index;
-        return DecodePdfBytes(bytes);
+        return DecodePdfBytes(bytes, toUnicodeMap);
     }
 
     private static bool IsHex(char value)
@@ -486,14 +648,80 @@ public static class PromptPackNativeHelper
             (value >= 'A' && value <= 'F');
     }
 
-    private static string DecodePdfBytes(byte[] bytes)
+    private static string DecodePdfBytes(byte[] bytes, Dictionary<string, string> toUnicodeMap)
     {
+        if (toUnicodeMap != null && toUnicodeMap.Count > 0)
+        {
+            string mapped = DecodeWithToUnicodeMap(bytes, toUnicodeMap);
+            if (!String.IsNullOrEmpty(mapped))
+            {
+                return mapped;
+            }
+        }
+
         if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
         {
             return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
         }
 
         return Encoding.GetEncoding(28591).GetString(bytes);
+    }
+
+    private static string DecodeWithToUnicodeMap(byte[] bytes, Dictionary<string, string> toUnicodeMap)
+    {
+        string hex = BytesToHex(bytes);
+        StringBuilder output = new StringBuilder();
+        int index = 0;
+        int mappedCount = 0;
+
+        while (index < hex.Length)
+        {
+            bool matched = false;
+            int remaining = hex.Length - index;
+            int maxLength = Math.Min(8, remaining);
+            for (int length = maxLength; length >= 2; length -= 2)
+            {
+                string key = hex.Substring(index, length);
+                string value;
+                if (toUnicodeMap.TryGetValue(key, out value))
+                {
+                    output.Append(value);
+                    index += length;
+                    mappedCount++;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if (!matched)
+            {
+                byte value = Convert.ToByte(hex.Substring(index, 2), 16);
+                if (value >= 0x20 && value <= 0x7E)
+                {
+                    output.Append((char)value);
+                }
+                index += 2;
+            }
+        }
+
+        if (mappedCount == 0)
+        {
+            return "";
+        }
+
+        return output.ToString();
+    }
+
+    private static string BytesToHex(byte[] bytes)
+    {
+        char[] chars = new char[bytes.Length * 2];
+        const string alphabet = "0123456789ABCDEF";
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            chars[i * 2] = alphabet[(bytes[i] >> 4) & 0x0F];
+            chars[i * 2 + 1] = alphabet[bytes[i] & 0x0F];
+        }
+        return new string(chars);
     }
 
     private static string CleanExtractedText(string text)
