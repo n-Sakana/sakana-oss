@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0, Mandatory = $false)]
+    [Parameter(Position = 0, Mandatory = $false, ValueFromRemainingArguments = $true)]
     [string[]]$InputPaths,
 
     [string]$OutFile = "",
