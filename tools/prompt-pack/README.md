@@ -76,14 +76,11 @@ reg delete "HKCU\Software\Classes\Directory\shell\PromptPack" /f
 - PowerPoint: `.pptx`, `.ppt`, `.pptm`
 - PDF: `.pdf`
 
-## PDF behavior
+## Word and PDF behavior
 
-PDF extraction is two-stage:
+Word documents and PDF files are extracted through Microsoft Word COM so that `.docx`, `.doc`, `.docm`, `.rtf`, and `.pdf` use one consistent Word reading path.
 
-1. Try direct text-layer extraction with a built-in C# helper loaded through `Add-Type`.
-2. If no usable text is found, fall back to Word PDF import / OCR.
-
-The Word fallback uses the same resolved source path as other files and keeps the call close to the proven pattern:
+The call is kept close to the proven pattern:
 
 ```powershell
 $word = New-Object -ComObject Word.Application
@@ -92,21 +89,20 @@ $doc = $word.Documents.Open($Path)
 $text = $doc.Content.Text
 ```
 
-There is no PDF-only temporary path rewrite, no converter format override, and no external PDF/OCR dependency.
+There is no direct PDF text-layer parser, no PDF-only temporary path rewrite, no converter format override, and no external PDF/OCR dependency.
 
 ## Performance and timeout behavior
 
 Fast paths run in the parent process:
 
 - Text-like files
-- PDF files with directly extractable text layers
 
 Office-backed work remains isolated in a per-file worker PowerShell process:
 
 - Word files
 - Excel files
 - PowerPoint files
-- PDFs that need Word PDF import / OCR
+- PDF files through Word PDF import / OCR
 
 Defaults:
 
@@ -142,4 +138,4 @@ Worker-backed operations show an ASCII spinner with current stage, elapsed secon
 - The script does not summarize, compress, or truncate source content.
 - Unsupported, failed, and deferred files are recorded in the output.
 - Script-generated labels and console messages are English-only.
-- Microsoft Office is required for Office files and for PDF OCR/import fallback.
+- Microsoft Office is required for Office files and for PDF OCR/import.

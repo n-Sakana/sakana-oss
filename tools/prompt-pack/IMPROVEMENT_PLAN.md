@@ -11,8 +11,8 @@ The goal is to make PromptPack faster, safer around slow Office/PDF conversions,
 Implemented changes:
 
 - Add faster extraction paths for files that do not need Office COM.
-- Add a Windows-standard direct PDF text extraction pre-pass before Word PDF import.
-- Keep Word PDF import / OCR for scanned or handwritten PDFs.
+- Keep PDF extraction on the Word PDF import / OCR path for consistent output formatting.
+- Avoid custom PDF text-layer parsing because it can produce disordered text.
 - Improve console UX with clearer phases, progress, spinner updates, and final results.
 - Add optional Explorer context menu registration.
 - Move generated output files into an `output` directory under the PromptPack script directory.
@@ -41,8 +41,7 @@ Expected useful areas:
 
 - Fast text file reads.
 - Encoding detection helpers.
-- Direct PDF text-layer extraction.
-- Lightweight string and stream processing.
+- Lightweight string processing.
 
 Areas where C# will not solve the bottleneck:
 
@@ -89,22 +88,15 @@ Rules:
 - Do not truncate.
 - If decoding fails, record a failure instead of silently skipping the file.
 
-### 2.3 PDF direct text pre-pass
+### 2.3 PDF Word import path
 
-PDF handling is two-stage:
+PDF handling uses Word PDF import / OCR directly.
 
-1. Try direct PDF text-layer extraction using Windows-standard capabilities only.
-2. If direct extraction yields no usable text, fall back to Word PDF import / OCR.
+Reason:
 
-The direct extraction target is text-layer PDFs, not scanned image PDFs.
-
-Expected supported direct extraction patterns:
-
-- Basic PDF streams.
-- Common compressed streams that can be handled through .NET built-ins.
-- Basic `Tj` / `TJ` text drawing operations where practical.
-
-If the direct path is not confident, it should fall back to Word.
+- Custom direct PDF text-layer extraction can produce disordered text.
+- Word already provides the desired reading and OCR behavior in the target environment.
+- Keeping PDF on the Word path makes text-layer PDFs and scanned PDFs follow one consistent extraction format.
 
 Rules:
 
@@ -112,8 +104,8 @@ Rules:
 - Do not use a separate OCR engine.
 - Do not do PDF-only temporary path rewriting.
 - Do not pass a special PDF converter format to Word.
-- When Word is used, call Word with the same resolved source path used by other file types.
-- Word fallback should stay close to the proven production pattern:
+- Call Word with the same resolved source path used by other file types.
+- Word PDF handling should stay close to the proven production pattern:
   - `New-Object -ComObject 'Word.Application'`
   - `$word.Visible = $false`
   - `$doc = $word.Documents.Open($Path)`
@@ -126,7 +118,7 @@ Worker processes remain required for operations that can hang:
 - Word files.
 - Excel files.
 - PowerPoint files.
-- PDF files that need Word PDF import / OCR.
+- PDF files through Word PDF import / OCR.
 
 Timeout behavior remains:
 
@@ -366,8 +358,7 @@ Before push, verify:
 - Script files remain ASCII-only where required.
 - PowerShell syntax is valid.
 - Text files use the fast path.
-- Text-layer PDFs use direct extraction without Word.
-- Scanned PDFs fall back to Word PDF import / OCR.
+- PDFs use Word PDF import / OCR directly.
 - Word files still extract.
 - Excel files still extract.
 - PowerPoint files still extract.
@@ -392,8 +383,8 @@ Before push, verify:
 4. Add spinner display for worker waits.
 5. Add C# helper skeleton through `Add-Type`.
 6. Move text files to the fast parent-process path.
-7. Add direct PDF text-layer extraction.
-8. Keep Word OCR fallback for PDFs that need it.
+7. Keep PDFs on the Word PDF import / OCR path.
+8. Do not use custom direct PDF text extraction.
 9. Run Windows Helm tests.
 10. Commit and push.
 
@@ -408,8 +399,7 @@ The improvement set is done when:
 - Uninstall works without knowing the original install folder.
 - Output files are created under `tools/prompt-pack/output/`.
 - Text files are faster than the all-worker v1 behavior.
-- Text-layer PDFs avoid Word.
-- OCR-required PDFs still use Word.
+- PDFs use the same Word PDF import / OCR path.
 - A hung Office/PDF operation cannot block the whole run.
 - The user can see progress, current file, elapsed time, and spinner activity.
 - Deferred retry remains user-selectable.

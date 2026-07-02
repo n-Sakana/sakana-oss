@@ -54,8 +54,8 @@ User operation:
 1. Drag files or folders onto `PromptPack.bat`
 2. PowerShell starts
 3. The script scans input paths
-4. The script extracts fast-path files in the parent process
-5. Office-backed files and OCR fallback run in per-file worker processes
+4. The script extracts fast-path text files in the parent process
+5. Office-backed files and PDF Word import/OCR run in per-file worker processes
 6. A per-file timeout prevents a single hung worker from blocking the whole run
 7. The script writes a single `.txt` output file under `output/` after the main pass
 8. If timeout-deferred files exist, the user can choose whether to retry them
@@ -176,12 +176,11 @@ Supported:
 Processing rules:
 
 - Resolve and validate the input path using the same path handling used for other file types
-- First try direct text-layer extraction using the built-in C# helper loaded through `Add-Type`
-- Use Windows-standard .NET capabilities only
-- If no usable direct text is found, open the original PDF path directly with Word COM
+- Open the original PDF path directly with Word COM
+- Do not use a direct PDF text-layer parser
 - Do not use PDF-only temporary path rewriting
 - Do not pass a special PDF converter format to Word
-- Let Word handle PDF conversion and OCR for scanned or handwritten PDFs
+- Let Word handle PDF conversion and OCR for text, scanned, or handwritten PDFs
 - Extract text from the opened Word document
 - Keep the original path in the output
 
@@ -393,8 +392,7 @@ Status examples:
 - `OK_WORD`
 - `OK_EXCEL`
 - `OK_POWERPOINT`
-- `OK_PDF_TEXT`
-- `OK_WORD_OCR`
+- `OK_WORD_PDF`
 - `FAIL`
 - `UNSUPPORTED`
 - `DEFERRED_TIMEOUT`
@@ -409,7 +407,7 @@ Phase: EXTRACT
 Output: C:\repos\sakana-oss\tools\prompt-pack\output\promptpack_20260702_143000.txt
 
 [18/48] PDF    Working / Stage: OPEN_PDF Elapsed: 12s / 120s  report.pdf
-[18/48] PDF    OK_WORD_OCR      C:\path\report.pdf
+[18/48] PDF    OK_WORD_PDF      C:\path\report.pdf
 
 Summary:
 OK:          42
@@ -419,13 +417,13 @@ Unsupported: 1
 Total:       48
 ```
 
-PowerShell may use `Write-Host` with colors and `Write-Progress` if it does not make output harder to read.
+PowerShell should use `Write-Host` with colors and same-line console updates. Do not use `Write-Progress` for the main spinner because it can produce repeated lines in some hosts.
 
 ---
 
 ## 12. Timeout and Deferred Retry
 
-Fast-path extraction runs in the parent process. Office-backed extraction and PDF Word OCR fallback run in separate worker PowerShell processes.
+Fast-path text extraction runs in the parent process. Office-backed extraction and all PDF Word import/OCR work run in separate worker PowerShell processes.
 
 Default settings:
 
@@ -570,7 +568,7 @@ v1 is complete when:
 - Drag-and-drop of folders onto `.bat` works
 - OneDrive / SharePoint synchronized paths work
 - Word, Excel, PowerPoint, PDF, and text files are processed
-- PDF text is extracted through direct Word PDF import / OCR
+- PDF text is extracted through Word PDF import / OCR
 - A single `.txt` file is generated
 - A hung file is deferred instead of blocking the whole run
 - Deferred retry is selectable by the user
