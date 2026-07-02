@@ -39,7 +39,15 @@ if "%~1"=="" (
     exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
+set ARGS=
+:PromptPackBuildArgs
+if "%~1"=="" goto PromptPackArgsDone
+set ARGS=%ARGS% "%~1"
+shift /1
+goto PromptPackBuildArgs
+:PromptPackArgsDone
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %ARGS%
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
