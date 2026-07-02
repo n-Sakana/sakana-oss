@@ -10,8 +10,8 @@ $targets = @(
 )
 
 foreach ($target in $targets) {
-    if (Test-Path -Path $target) {
-        Remove-Item -Path $target -Recurse -Force
+    if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Recurse -Force
     }
 }
 

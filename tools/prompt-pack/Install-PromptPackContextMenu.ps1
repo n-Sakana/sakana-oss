@@ -19,15 +19,15 @@ $targets = @(
 $command = '"' + $runner + '" "%1"'
 
 foreach ($target in $targets) {
-    $commandKey = Join-Path -Path $target -ChildPath "command"
-    [void](New-Item -Path $target -Force)
-    [void](New-Item -Path $commandKey -Force)
-    Set-Item -Path $target -Value "Run PromptPack"
-    New-ItemProperty -Path $target -Name "MUIVerb" -Value "Run PromptPack" -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $target -Name "Icon" -Value $runner -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $target -Name "InstallPath" -Value ($root + [System.IO.Path]::DirectorySeparatorChar) -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $target -Name "ScriptPath" -Value $runner -PropertyType String -Force | Out-Null
-    Set-Item -Path $commandKey -Value $command
+    $commandKey = $target + "\command"
+    [void](New-Item -LiteralPath $target -Force)
+    [void](New-Item -LiteralPath $commandKey -Force)
+    Set-Item -LiteralPath $target -Value "Run PromptPack"
+    New-ItemProperty -LiteralPath $target -Name "MUIVerb" -Value "Run PromptPack" -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $target -Name "Icon" -Value $runner -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $target -Name "InstallPath" -Value ($root + [System.IO.Path]::DirectorySeparatorChar) -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $target -Name "ScriptPath" -Value $runner -PropertyType String -Force | Out-Null
+    Set-Item -LiteralPath $commandKey -Value $command
 }
 
 Write-Host "PromptPack context menu installed for current user." -ForegroundColor Green
