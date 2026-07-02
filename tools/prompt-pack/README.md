@@ -18,6 +18,8 @@ PromptPack bundles files and folders into one structured text file for generativ
 
 Drag files or folders onto `PromptPack.bat`.
 
+When launched from Explorer, the BAT file reopens itself in a persistent command window so that progress, errors, and final results remain visible. Close the window manually after reading the result.
+
 The BAT file starts PowerShell without administrator privileges:
 
 ```bat
