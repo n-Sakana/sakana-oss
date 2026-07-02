@@ -49,9 +49,11 @@ User operation:
 1. Drag files or folders onto `PromptPack.bat`
 2. PowerShell starts
 3. The script scans input paths
-4. The script extracts contents from supported files
-5. The script writes a single `.txt` output file
-6. The console shows the output path and extraction summary
+4. The script extracts contents from supported files in per-file worker processes
+5. A per-file timeout prevents a single hung file from blocking the whole run
+6. The script writes a single `.txt` output file after the main pass
+7. If timeout-deferred files exist, the user can choose whether to retry them
+8. The console shows the output path and extraction summary
 
 Expected `.bat` shape:
 
@@ -77,7 +79,7 @@ The `.bat` file itself must contain English text only.
 - Microsoft Office installed
 - No administrator privileges required
 
-Office COM automation is used for Office documents and PDF import through Word.
+Office COM automation is used for Office documents and PDF OCR/import through Word.
 
 ---
 
@@ -167,9 +169,14 @@ Supported:
 
 Processing rules:
 
-- Open the PDF with Word COM
+- Resolve and validate the input path using the same path handling used for other file types
+- Open the original PDF path directly with Word COM
+- Do not use PDF-only temporary path rewriting
+- Do not use PDF-only direct text extraction before Word
+- Do not pass a special PDF converter format to Word
 - Let Word handle PDF conversion and OCR
 - Extract text from the opened Word document
+- Keep the original path in the output
 - Support scanned or handwritten PDFs as far as Word can recognize them
 
 Rules:
@@ -290,7 +297,7 @@ Project/
 
 | No | Status | Type | Path | Method | Notes |
 |---:|---|---|---|---|---|
-| 1 | OK | PDF | C:\...\proposal.pdf | Word PDF Import | |
+| 1 | OK | PDF | C:\...\proposal.pdf | Word PDF Import | Opened directly with Word |
 | 2 | OK | Markdown | C:\...\notes.md | Text Read | UTF-8 |
 | 3 | FAIL | Excel | C:\...\locked.xlsx | Excel COM | Password protected |
 
@@ -398,7 +405,41 @@ PowerShell may use `Write-Host` with colors and `Write-Progress` if it does not 
 
 ---
 
-## 12. Error Handling
+## 12. Timeout and Deferred Retry
+
+All file extraction work runs in a separate worker PowerShell process.
+
+Default settings:
+
+- Main pass timeout: 120 seconds per file
+- Retry timeout: 300 seconds per file
+- Deferred retry: ask the user after the main pass
+
+Timeout behavior:
+
+- If a worker exceeds the timeout, the parent process stops that worker
+- The file is recorded as `DEFERRED_TIMEOUT`
+- The main pass continues with the next file
+- The output file is written after the main pass
+- Deferred files are listed in the summary and in a dedicated section
+- The user can choose whether to retry deferred files
+- Retry is never automatic unless explicitly requested with a command-line option
+
+Worker diagnostics:
+
+- Workers write stage markers such as `START_WORD`, `OPEN_PDF`, `READ_CONTENT`, and `CLOSE_DOCUMENT`
+- Timeout notes include the last known stage when available
+- PDF handling uses the same resolved original path as the source input and opens it directly with Word COM
+
+Command-line controls:
+
+- `-TimeoutSeconds <n>`
+- `-RetryTimeoutSeconds <n>`
+- `-DeferredAction Ask|Retry|Skip`
+
+---
+
+## 13. Error Handling
 
 The tool must not silently skip failed files.
 
@@ -424,7 +465,7 @@ Failure records must appear both in the extraction summary and in the failed fil
 
 ---
 
-## 13. Non-Goals for v1
+## 14. Non-Goals for v1
 
 v1 does not do the following:
 
@@ -444,7 +485,7 @@ The tool only bundles source content into one structured text file.
 
 ---
 
-## 14. Implementation Outline
+## 15. Implementation Outline
 
 Expected PowerShell functions:
 
@@ -453,6 +494,8 @@ Expected PowerShell functions:
 - `Read-ExcelFile`
 - `Read-PowerPointFile`
 - `Read-PdfFileWithWord`
+- `Invoke-FileExtractionWithTimeout`
+- `Invoke-WorkerMode`
 - `Write-ConsoleStatus`
 - `Build-OutputText`
 
@@ -462,15 +505,17 @@ Expected high-level process:
 2. Validate inputs with `Get-Item -LiteralPath`
 3. Recursively collect supported files from folders
 4. Build file tree data
-5. Dispatch each file by extension
+5. Dispatch each file to a worker process with a timeout
 6. Store extraction result objects
-7. Build structured output text
-8. Write the `.txt` file
-9. Show final summary in the console
+7. Mark timed-out files as `DEFERRED_TIMEOUT`
+8. Build structured output text
+9. Write the `.txt` file
+10. Ask whether to retry deferred files when needed
+11. Show final summary in the console
 
 ---
 
-## 15. Completion Criteria
+## 16. Completion Criteria
 
 v1 is complete when:
 
@@ -478,9 +523,12 @@ v1 is complete when:
 - Drag-and-drop of folders onto `.bat` works
 - OneDrive / SharePoint synchronized paths work
 - Word, Excel, PowerPoint, PDF, and text files are processed
-- PDF text is extracted through Word PDF import / OCR
+- PDF text is extracted through direct Word PDF import / OCR
 - A single `.txt` file is generated
-- The output contains file tree, summary, contents, and failed files
+- A hung file is deferred instead of blocking the whole run
+- Deferred retry is selectable by the user
+- The output contains file tree, summary, contents, deferred files, and failed files
 - The console shows progress and final results
 - Script-generated labels are English-only
 - Source content is not silently summarized, compressed, or truncated
+- Script-generated labels are English-only

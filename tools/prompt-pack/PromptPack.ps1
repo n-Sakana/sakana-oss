@@ -3,7 +3,18 @@ param(
     [Parameter(Position = 0, Mandatory = $false)]
     [string[]]$InputPaths,
 
-    [string]$OutFile = ""
+    [string]$OutFile = "",
+
+    [int]$TimeoutSeconds = 120,
+
+    [int]$RetryTimeoutSeconds = 300,
+
+    [ValidateSet("Ask", "Retry", "Skip")]
+    [string]$DeferredAction = "Ask",
+
+    [switch]$Worker,
+
+    [string]$WorkerRequestPath = ""
 )
 
 Set-StrictMode -Version 2.0
@@ -29,6 +40,9 @@ $script:ExcelApp = $null
 $script:PowerPointApp = $null
 $script:ScanMessages = New-Object "System.Collections.Generic.List[string]"
 $script:ExitCode = 0
+$script:WorkerStagePath = ""
+$script:WorkerPidPath = ""
+$script:OwnedOfficePids = New-Object "System.Collections.Generic.HashSet[int]"
 
 function Write-Section {
     param([string]$Text)
@@ -51,6 +65,64 @@ function Write-Warn {
 function Write-Fail {
     param([string]$Text)
     Write-Host ("[FAIL] " + $Text) -ForegroundColor Red
+}
+
+function Set-WorkerStage {
+    param([string]$Stage)
+
+    if ([string]::IsNullOrWhiteSpace($script:WorkerStagePath)) {
+        return
+    }
+
+    try {
+        $line = "{0}`t{1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff zzz"), $Stage
+        Add-Content -LiteralPath $script:WorkerStagePath -Value $line -Encoding UTF8
+    }
+    catch {
+    }
+}
+
+function Get-ProcessIdsByName {
+    param([string]$Name)
+
+    try {
+        return @((Get-Process -Name $Name -ErrorAction SilentlyContinue) | ForEach-Object { [int]$_.Id })
+    }
+    catch {
+        return @()
+    }
+}
+
+function Add-OwnedOfficePid {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return
+    }
+
+    if ($script:OwnedOfficePids.Add($ProcessId)) {
+        if (-not [string]::IsNullOrWhiteSpace($script:WorkerPidPath)) {
+            try {
+                Add-Content -LiteralPath $script:WorkerPidPath -Value ([string]$ProcessId) -Encoding ASCII
+            }
+            catch {
+            }
+        }
+    }
+}
+
+function Register-NewOfficeProcesses {
+    param(
+        [string]$ProcessName,
+        [int[]]$Before
+    )
+
+    $after = @(Get-ProcessIdsByName -Name $ProcessName)
+    foreach ($processId in $after) {
+        if ($Before -notcontains $processId) {
+            Add-OwnedOfficePid -ProcessId $processId
+        }
+    }
 }
 
 function Release-ComObjectSafe {
@@ -88,12 +160,38 @@ function Stop-OfficeApplications {
     [GC]::WaitForPendingFinalizers()
 }
 
+function Stop-OwnedOfficeProcessesFromFile {
+    param([string]$PidPath)
+
+    if ([string]::IsNullOrWhiteSpace($PidPath) -or -not (Test-Path -LiteralPath $PidPath -PathType Leaf)) {
+        return
+    }
+
+    $processIds = @()
+    try {
+        $processIds = @(Get-Content -LiteralPath $PidPath -ErrorAction Stop | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+    }
+    catch {
+        return
+    }
+
+    foreach ($processId in $processIds) {
+        try {
+            $process = Get-Process -Id $processId -ErrorAction Stop
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        catch {
+        }
+    }
+}
+
 function Get-WordApplication {
     if ($null -eq $script:WordApp) {
+        $before = @(Get-ProcessIdsByName -Name "WINWORD")
+        Set-WorkerStage -Stage "START_WORD"
         $script:WordApp = New-Object -ComObject Word.Application
+        Register-NewOfficeProcesses -ProcessName "WINWORD" -Before $before
         $script:WordApp.Visible = $false
-        $script:WordApp.DisplayAlerts = 0
-        try { $script:WordApp.AutomationSecurity = 3 } catch { }
     }
 
     return $script:WordApp
@@ -101,7 +199,10 @@ function Get-WordApplication {
 
 function Get-ExcelApplication {
     if ($null -eq $script:ExcelApp) {
+        $before = @(Get-ProcessIdsByName -Name "EXCEL")
+        Set-WorkerStage -Stage "START_EXCEL"
         $script:ExcelApp = New-Object -ComObject Excel.Application
+        Register-NewOfficeProcesses -ProcessName "EXCEL" -Before $before
         $script:ExcelApp.Visible = $false
         $script:ExcelApp.DisplayAlerts = $false
         try { $script:ExcelApp.AskToUpdateLinks = $false } catch { }
@@ -113,7 +214,10 @@ function Get-ExcelApplication {
 
 function Get-PowerPointApplication {
     if ($null -eq $script:PowerPointApp) {
+        $before = @(Get-ProcessIdsByName -Name "POWERPNT")
+        Set-WorkerStage -Stage "START_POWERPOINT"
         $script:PowerPointApp = New-Object -ComObject PowerPoint.Application
+        Register-NewOfficeProcesses -ProcessName "POWERPNT" -Before $before
         try { $script:PowerPointApp.DisplayAlerts = 1 } catch { }
         try { $script:PowerPointApp.AutomationSecurity = 3 } catch { }
     }
@@ -201,6 +305,7 @@ function New-ExtractionResult {
 function Read-TextFile {
     param([string]$Path)
 
+    Set-WorkerStage -Stage "READ_TEXT"
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     $encodingName = "UTF-8"
     $text = $null
@@ -245,14 +350,17 @@ function Read-TextFile {
 function Read-WordLikeFile {
     param(
         [string]$Path,
-        [string]$Method
+        [string]$Method,
+        [string]$OpenStage = "OPEN_DOCUMENT"
     )
 
     $word = Get-WordApplication
     $document = $null
 
     try {
-        $document = $word.Documents.Open($Path, $false, $true, $false)
+        Set-WorkerStage -Stage $OpenStage
+        $document = $word.Documents.Open($Path)
+        Set-WorkerStage -Stage "READ_CONTENT"
         $text = $document.Content.Text
 
         if ($null -eq $text) {
@@ -272,6 +380,7 @@ function Read-WordLikeFile {
     }
     finally {
         if ($null -ne $document) {
+            Set-WorkerStage -Stage "CLOSE_DOCUMENT"
             try { $document.Close($false) } catch { }
             Release-ComObjectSafe -Object $document
         }
@@ -280,12 +389,20 @@ function Read-WordLikeFile {
 
 function Read-WordFile {
     param([string]$Path)
-    return Read-WordLikeFile -Path $Path -Method "Word COM"
+    return Read-WordLikeFile -Path $Path -Method "Word COM" -OpenStage "OPEN_DOCUMENT"
 }
 
 function Read-PdfFileWithWord {
     param([string]$Path)
-    return Read-WordLikeFile -Path $Path -Method "Word PDF Import"
+
+    $data = Read-WordLikeFile -Path $Path -Method "Word PDF Import" -OpenStage "OPEN_PDF"
+    if ([string]::IsNullOrWhiteSpace($data.Notes)) {
+        $data.Notes = "Opened directly with Word"
+    }
+    else {
+        $data.Notes = $data.Notes + "; Opened directly with Word"
+    }
+    return $data
 }
 
 function Format-CellText {
@@ -311,7 +428,9 @@ function Read-ExcelFile {
     $builder = New-Object System.Text.StringBuilder
 
     try {
+        Set-WorkerStage -Stage "OPEN_WORKBOOK"
         $workbook = $excel.Workbooks.Open($Path, 0, $true)
+        Set-WorkerStage -Stage "READ_WORKBOOK"
 
         for ($sheetIndex = 1; $sheetIndex -le $workbook.Worksheets.Count; $sheetIndex++) {
             $worksheet = $workbook.Worksheets.Item($sheetIndex)
@@ -360,6 +479,7 @@ function Read-ExcelFile {
     }
     finally {
         if ($null -ne $workbook) {
+            Set-WorkerStage -Stage "CLOSE_WORKBOOK"
             try { $workbook.Close($false) } catch { }
             Release-ComObjectSafe -Object $workbook
         }
@@ -420,7 +540,9 @@ function Read-PowerPointFile {
     $builder = New-Object System.Text.StringBuilder
 
     try {
+        Set-WorkerStage -Stage "OPEN_PRESENTATION"
         $presentation = $powerPoint.Presentations.Open($Path, -1, 0, 0)
+        Set-WorkerStage -Stage "READ_PRESENTATION"
 
         for ($slideIndex = 1; $slideIndex -le $presentation.Slides.Count; $slideIndex++) {
             $slide = $presentation.Slides.Item($slideIndex)
@@ -444,6 +566,7 @@ function Read-PowerPointFile {
     }
     finally {
         if ($null -ne $presentation) {
+            Set-WorkerStage -Stage "CLOSE_PRESENTATION"
             try { $presentation.Close() } catch { }
             Release-ComObjectSafe -Object $presentation
         }
@@ -486,6 +609,63 @@ function Invoke-FileExtraction {
     }
     catch {
         return New-ExtractionResult -No $No -Status "FAIL" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes $_.Exception.Message -Content ""
+    }
+}
+
+function ConvertTo-JsonFile {
+    param(
+        [object]$Data,
+        [string]$Path
+    )
+
+    $json = $Data | ConvertTo-Json -Depth 12
+    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
+}
+
+function Invoke-WorkerMode {
+    if ([string]::IsNullOrWhiteSpace($WorkerRequestPath)) {
+        throw "Worker request path was not provided."
+    }
+
+    $request = $null
+    $requestJson = [System.IO.File]::ReadAllText($WorkerRequestPath, [System.Text.Encoding]::UTF8)
+    $request = $requestJson | ConvertFrom-Json
+    $script:WorkerStagePath = [string]$request.StagePath
+    $script:WorkerPidPath = [string]$request.PidPath
+
+    try {
+        Set-WorkerStage -Stage "START_WORKER"
+        $file = Get-Item -LiteralPath ([string]$request.InputPath) -Force -ErrorAction Stop
+        $result = Invoke-FileExtraction -File $file -No ([int]$request.No)
+        Set-WorkerStage -Stage "WRITE_RESULT"
+        ConvertTo-JsonFile -Data $result -Path ([string]$request.ResultPath)
+        Set-WorkerStage -Stage "END_WORKER"
+    }
+    catch {
+        $path = ""
+        $no = 0
+        $resultPath = ""
+        try {
+            if ($null -ne $request) {
+                $path = [string]$request.InputPath
+                $no = [int]$request.No
+                $resultPath = [string]$request.ResultPath
+            }
+        }
+        catch {
+        }
+
+        if ([string]::IsNullOrWhiteSpace($resultPath)) {
+            throw
+        }
+
+        $result = New-ExtractionResult -No $no -Status "FAIL" -Type (Get-FileKind -Path $path) -Path $path -Method "Worker extraction" -Notes $_.Exception.Message -Content ""
+        ConvertTo-JsonFile -Data $result -Path $resultPath
+        exit 1
+    }
+    finally {
+        Stop-OfficeApplications
     }
 }
 
@@ -623,11 +803,209 @@ function Write-StatusLine {
     if ($Result.Status -eq "OK") { $statusColor = "Green" }
     elseif ($Result.Status -eq "FAIL") { $statusColor = "Red" }
     elseif ($Result.Status -eq "UNSUPPORTED") { $statusColor = "DarkYellow" }
+    elseif ($Result.Status -eq "DEFERRED_TIMEOUT") { $statusColor = "Yellow" }
 
     $prefix = "[{0}/{1}] {2,-6} " -f $Index, $Total, $Result.TypeCode
     Write-Host $prefix -NoNewline -ForegroundColor DarkGray
-    Write-Host ("{0,-11}" -f $Result.Status) -NoNewline -ForegroundColor $statusColor
+    Write-Host ("{0,-17}" -f $Result.Status) -NoNewline -ForegroundColor $statusColor
     Write-Host (" {0}" -f $Result.Path) -ForegroundColor Gray
+}
+
+function Get-LatestWorkerStage {
+    param([string]$StagePath)
+
+    if ([string]::IsNullOrWhiteSpace($StagePath) -or -not (Test-Path -LiteralPath $StagePath -PathType Leaf)) {
+        return "Unknown"
+    }
+
+    try {
+        $line = Get-Content -LiteralPath $StagePath -Tail 1 -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            return "Unknown"
+        }
+        $parts = ([string]$line).Split("`t")
+        if ($parts.Count -ge 2) {
+            return $parts[1]
+        }
+        return [string]$line
+    }
+    catch {
+        return "Unknown"
+    }
+}
+
+function ConvertTo-WindowsCommandLineArgument {
+    param([string]$Argument)
+
+    if ($null -eq $Argument) {
+        return '""'
+    }
+
+    if ($Argument.Length -eq 0) {
+        return '""'
+    }
+
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashCount = 0
+
+    foreach ($char in $Argument.ToCharArray()) {
+        if ($char -eq '\') {
+            $backslashCount++
+        }
+        elseif ($char -eq '"') {
+            [void]$builder.Append('\' * (($backslashCount * 2) + 1))
+            [void]$builder.Append('"')
+            $backslashCount = 0
+        }
+        else {
+            if ($backslashCount -gt 0) {
+                [void]$builder.Append('\' * $backslashCount)
+                $backslashCount = 0
+            }
+            [void]$builder.Append($char)
+        }
+    }
+
+    if ($backslashCount -gt 0) {
+        [void]$builder.Append('\' * ($backslashCount * 2))
+    }
+
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-WindowsCommandLine {
+    param([string[]]$Arguments)
+
+    return (($Arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Argument $_ }) -join " ")
+}
+
+function New-DeferredTimeoutResult {
+    param(
+        [System.IO.FileInfo]$File,
+        [int]$No,
+        [int]$TimeoutSeconds,
+        [string]$Stage
+    )
+
+    $kind = Get-FileKind -Path $File.FullName
+    return New-ExtractionResult -No $No -Status "DEFERRED_TIMEOUT" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes ("Timeout after {0} seconds. Last stage: {1}" -f $TimeoutSeconds, $Stage) -Content ""
+}
+
+function Invoke-FileExtractionWithTimeout {
+    param(
+        [System.IO.FileInfo]$File,
+        [int]$No,
+        [int]$TimeoutSeconds
+    )
+
+    $jobRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "PromptPack"
+    $jobDir = Join-Path -Path $jobRoot -ChildPath ("job_{0}" -f [System.Guid]::NewGuid().ToString("N"))
+    [void](New-Item -ItemType Directory -Path $jobDir -Force)
+
+    $requestPath = Join-Path -Path $jobDir -ChildPath "request.json"
+    $resultPath = Join-Path -Path $jobDir -ChildPath "result.json"
+    $stagePath = Join-Path -Path $jobDir -ChildPath "stage.log"
+    $pidPath = Join-Path -Path $jobDir -ChildPath "office-pids.txt"
+    $stdoutPath = Join-Path -Path $jobDir -ChildPath "stdout.txt"
+    $stderrPath = Join-Path -Path $jobDir -ChildPath "stderr.txt"
+
+    try {
+        $request = [pscustomobject]@{
+            InputPath = $File.FullName
+            No = $No
+            ResultPath = $resultPath
+            StagePath = $stagePath
+            PidPath = $pidPath
+        }
+        ConvertTo-JsonFile -Data $request -Path $requestPath
+
+        $powerShellPath = Join-Path -Path $PSHOME -ChildPath "powershell.exe"
+        if (-not (Test-Path -LiteralPath $powerShellPath -PathType Leaf)) {
+            $powerShellPath = "powershell.exe"
+        }
+
+        $arguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-STA",
+            "-File", $PSCommandPath,
+            "-Worker",
+            "-WorkerRequestPath", $requestPath
+        )
+
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $powerShellPath
+        $startInfo.Arguments = Join-WindowsCommandLine -Arguments $arguments
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.WorkingDirectory = Split-Path -Parent $PSCommandPath
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+
+        $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+        while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 250
+        }
+
+        $completed = $process.HasExited
+        if (-not $completed) {
+            $stage = Get-LatestWorkerStage -StagePath $stagePath
+            Stop-OwnedOfficeProcessesFromFile -PidPath $pidPath
+            try { $process.Kill() } catch { }
+            try { [void]$process.WaitForExit(5000) } catch { }
+            return New-DeferredTimeoutResult -File $File -No $No -TimeoutSeconds $TimeoutSeconds -Stage $stage
+        }
+
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            [System.IO.File]::WriteAllText($stdoutPath, $stdout)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            [System.IO.File]::WriteAllText($stderrPath, $stderr)
+        }
+
+        if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+            $json = [System.IO.File]::ReadAllText($resultPath, [System.Text.Encoding]::UTF8)
+            return ($json | ConvertFrom-Json)
+        }
+
+        $kind = Get-FileKind -Path $File.FullName
+        $notes = "Worker completed without a result file."
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            $notes = $notes + " " + $stderr.Trim()
+        }
+        return New-ExtractionResult -No $No -Status "FAIL" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes $notes -Content ""
+    }
+    catch {
+        $kind = Get-FileKind -Path $File.FullName
+        return New-ExtractionResult -No $No -Status "FAIL" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes $_.Exception.Message -Content ""
+    }
+    finally {
+        try { Remove-Item -LiteralPath $jobDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
+function Get-ResultCounts {
+    param([object[]]$Results)
+
+    return [pscustomobject]@{
+        OK = @($Results | Where-Object { $_.Status -eq "OK" }).Count
+        Failed = @($Results | Where-Object { $_.Status -eq "FAIL" }).Count
+        Unsupported = @($Results | Where-Object { $_.Status -eq "UNSUPPORTED" }).Count
+        Deferred = @($Results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" }).Count
+        Total = $Results.Count
+    }
 }
 
 function Build-OutputText {
@@ -636,23 +1014,26 @@ function Build-OutputText {
         [string]$FileTree,
         [object[]]$Results,
         [string]$GeneratedAt,
-        [string]$OutputPath
+        [string]$OutputPath,
+        [int]$TimeoutSeconds,
+        [int]$RetryTimeoutSeconds
     )
 
     $builder = New-Object System.Text.StringBuilder
-    $okCount = @($Results | Where-Object { $_.Status -eq "OK" }).Count
-    $failCount = @($Results | Where-Object { $_.Status -eq "FAIL" }).Count
-    $unsupportedCount = @($Results | Where-Object { $_.Status -eq "UNSUPPORTED" }).Count
+    $counts = Get-ResultCounts -Results $Results
 
     [void]$builder.AppendLine("# PromptPack Bundle")
     [void]$builder.AppendLine("")
     [void]$builder.AppendLine("Generated At: $GeneratedAt")
     [void]$builder.AppendLine("Tool: PromptPack.ps1")
     [void]$builder.AppendLine("Output Path: $OutputPath")
-    [void]$builder.AppendLine("Total Files: $($Results.Count)")
-    [void]$builder.AppendLine("Succeeded: $okCount")
-    [void]$builder.AppendLine("Failed: $failCount")
-    [void]$builder.AppendLine("Unsupported: $unsupportedCount")
+    [void]$builder.AppendLine("Main Timeout Seconds: $TimeoutSeconds")
+    [void]$builder.AppendLine("Retry Timeout Seconds: $RetryTimeoutSeconds")
+    [void]$builder.AppendLine("Total Files: $($counts.Total)")
+    [void]$builder.AppendLine("Succeeded: $($counts.OK)")
+    [void]$builder.AppendLine("Failed: $($counts.Failed)")
+    [void]$builder.AppendLine("Deferred: $($counts.Deferred)")
+    [void]$builder.AppendLine("Unsupported: $($counts.Unsupported)")
     [void]$builder.AppendLine("")
     [void]$builder.AppendLine("---")
     [void]$builder.AppendLine("")
@@ -721,12 +1102,34 @@ function Build-OutputText {
         if ($result.Status -eq "OK") {
             [void]$builder.AppendLine($result.Content)
         }
+        elseif ($result.Status -eq "DEFERRED_TIMEOUT") {
+            [void]$builder.AppendLine("Extraction was deferred because the file timed out during the main pass.")
+        }
         else {
             [void]$builder.AppendLine("No content extracted.")
         }
 
         [void]$builder.AppendLine("")
         [void]$builder.AppendLine("---")
+    }
+
+    [void]$builder.AppendLine("")
+    [void]$builder.AppendLine("## Deferred Files")
+    [void]$builder.AppendLine("")
+    $deferred = @($Results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" })
+    if ($deferred.Count -eq 0) {
+        [void]$builder.AppendLine("None")
+    }
+    else {
+        foreach ($result in $deferred) {
+            [void]$builder.AppendLine("### Deferred File $($result.No)")
+            [void]$builder.AppendLine("")
+            [void]$builder.AppendLine("Path: $($result.Path)")
+            [void]$builder.AppendLine("Type: $($result.Type)")
+            [void]$builder.AppendLine("Method: $($result.Method)")
+            [void]$builder.AppendLine("Reason: $($result.Notes)")
+            [void]$builder.AppendLine("")
+        }
     }
 
     [void]$builder.AppendLine("")
@@ -764,12 +1167,155 @@ function Build-OutputText {
     return $builder.ToString()
 }
 
+function Write-BundleOutput {
+    param(
+        [string[]]$InputPaths,
+        [string]$FileTree,
+        [object[]]$Results,
+        [string]$OutputPath,
+        [int]$TimeoutSeconds,
+        [int]$RetryTimeoutSeconds
+    )
+
+    $generatedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
+    $outputText = Build-OutputText -InputPaths $InputPaths -FileTree $FileTree -Results $Results -GeneratedAt $generatedAt -OutputPath $OutputPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
+    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($OutputPath, $outputText, $utf8NoBom)
+}
+
+function Write-Summary {
+    param(
+        [string]$Title,
+        [string]$OutputPath,
+        [object[]]$Results
+    )
+
+    $counts = Get-ResultCounts -Results $Results
+
+    Write-Section -Text $Title
+    Write-Host "Output:" -ForegroundColor Gray
+    Write-Host $OutputPath -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Summary:" -ForegroundColor Gray
+
+    $failColor = "Gray"
+    if ($counts.Failed -gt 0) {
+        $failColor = "Red"
+    }
+
+    $deferredColor = "Gray"
+    if ($counts.Deferred -gt 0) {
+        $deferredColor = "Yellow"
+    }
+
+    Write-Host ("OK:          {0}" -f $counts.OK) -ForegroundColor Green
+    Write-Host ("Failed:      {0}" -f $counts.Failed) -ForegroundColor $failColor
+    Write-Host ("Deferred:    {0}" -f $counts.Deferred) -ForegroundColor $deferredColor
+    Write-Host ("Unsupported: {0}" -f $counts.Unsupported) -ForegroundColor DarkYellow
+    Write-Host ("Total:       {0}" -f $counts.Total) -ForegroundColor Gray
+
+    if ($script:ScanMessages.Count -gt 0) {
+        Write-Warn -Text ("Scan messages: {0}" -f $script:ScanMessages.Count)
+    }
+}
+
+function Invoke-MainExtractionPass {
+    param(
+        [System.IO.FileInfo[]]$Files,
+        [int]$TimeoutSeconds
+    )
+
+    $results = New-Object "System.Collections.Generic.List[object]"
+    $index = 0
+
+    foreach ($file in $Files) {
+        $index++
+        $percent = [int](($index / [double]$Files.Count) * 100)
+        Write-Progress -Activity "PromptPack" -Status ("Processing {0} of {1}" -f $index, $Files.Count) -PercentComplete $percent
+
+        $result = Invoke-FileExtractionWithTimeout -File $file -No $index -TimeoutSeconds $TimeoutSeconds
+        $results.Add($result) | Out-Null
+        Write-StatusLine -Index $index -Total $Files.Count -Result $result
+    }
+
+    Write-Progress -Activity "PromptPack" -Completed
+    return ,$results
+}
+
+function Invoke-DeferredRetryPass {
+    param(
+        [System.Collections.Generic.List[object]]$Results,
+        [int]$TimeoutSeconds
+    )
+
+    $deferred = @($Results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" })
+    if ($deferred.Count -eq 0) {
+        return
+    }
+
+    Write-Section -Text "Retry Deferred Files"
+    $retryIndex = 0
+    foreach ($oldResult in $deferred) {
+        $retryIndex++
+        $percent = [int](($retryIndex / [double]$deferred.Count) * 100)
+        Write-Progress -Activity "PromptPack Retry" -Status ("Retrying {0} of {1}" -f $retryIndex, $deferred.Count) -PercentComplete $percent
+
+        try {
+            $file = Get-Item -LiteralPath $oldResult.Path -Force -ErrorAction Stop
+            $newResult = Invoke-FileExtractionWithTimeout -File $file -No ([int]$oldResult.No) -TimeoutSeconds $TimeoutSeconds
+        }
+        catch {
+            $newResult = New-ExtractionResult -No ([int]$oldResult.No) -Status "FAIL" -Type $oldResult.Type -Path $oldResult.Path -Method $oldResult.Method -Notes $_.Exception.Message -Content ""
+        }
+
+        $Results[[int]$oldResult.No - 1] = $newResult
+        Write-StatusLine -Index $retryIndex -Total $deferred.Count -Result $newResult
+    }
+
+    Write-Progress -Activity "PromptPack Retry" -Completed
+}
+
+function Get-DeferredRetryChoice {
+    param([object[]]$Results)
+
+    $deferred = @($Results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" })
+    if ($deferred.Count -eq 0) {
+        return "Skip"
+    }
+
+    if ($DeferredAction -eq "Retry") {
+        return "Retry"
+    }
+
+    if ($DeferredAction -eq "Skip") {
+        return "Skip"
+    }
+
+    Write-Section -Text "Deferred Files"
+    Write-Host ("Deferred files found: {0}" -f $deferred.Count) -ForegroundColor Yellow
+    foreach ($result in $deferred) {
+        Write-Host ("[{0}] {1}  {2}" -f $result.No, $result.TypeCode, $result.Path) -ForegroundColor Gray
+        Write-Host ("    {0}" -f $result.Notes) -ForegroundColor DarkGray
+    }
+
+    Write-Host ""
+    Write-Host "Retry deferred files now? [R] Retry / [S] Skip (default: S): " -NoNewline -ForegroundColor Cyan
+    $choice = Read-Host
+    if ($choice -match '^[Rr]') {
+        return "Retry"
+    }
+
+    return "Skip"
+}
+
 function Invoke-PromptPack {
     if ($null -eq $InputPaths -or $InputPaths.Count -eq 0) {
         throw "No input paths were provided."
     }
 
     Write-Section -Text "PromptPack"
+    Write-Info -Text ("Main timeout seconds: {0}" -f $TimeoutSeconds)
+    Write-Info -Text ("Retry timeout seconds: {0}" -f $RetryTimeoutSeconds)
     Write-Info -Text "Collecting files..."
 
     $baseDirectory = Get-OutputBaseDirectory -FirstPath $InputPaths[0]
@@ -782,20 +1328,7 @@ function Invoke-PromptPack {
 
     Write-Info -Text ("Files found: {0}" -f $files.Count)
 
-    $results = New-Object "System.Collections.Generic.List[object]"
-    $index = 0
-
-    foreach ($file in $files) {
-        $index++
-        $percent = [int](($index / [double]$files.Count) * 100)
-        Write-Progress -Activity "PromptPack" -Status ("Processing {0} of {1}" -f $index, $files.Count) -PercentComplete $percent
-
-        $result = Invoke-FileExtraction -File $file -No $index
-        $results.Add($result) | Out-Null
-        Write-StatusLine -Index $index -Total $files.Count -Result $result
-    }
-
-    Write-Progress -Activity "PromptPack" -Completed
+    $results = Invoke-MainExtractionPass -Files $files -TimeoutSeconds $TimeoutSeconds
 
     if ([string]::IsNullOrWhiteSpace($OutFile)) {
         $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -808,45 +1341,38 @@ function Invoke-PromptPack {
         [void](New-Item -ItemType Directory -Path $outputDirectory -Force)
     }
 
-    $generatedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
-    $outputText = Build-OutputText -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -GeneratedAt $generatedAt -OutputPath $outputFullPath
-    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
-    [System.IO.File]::WriteAllText($outputFullPath, $outputText, $utf8NoBom)
+    Write-BundleOutput -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -OutputPath $outputFullPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
+    Write-Summary -Title "Main Pass Completed" -OutputPath $outputFullPath -Results $results.ToArray()
 
-    $okCount = @($results | Where-Object { $_.Status -eq "OK" }).Count
-    $failCount = @($results | Where-Object { $_.Status -eq "FAIL" }).Count
-    $unsupportedCount = @($results | Where-Object { $_.Status -eq "UNSUPPORTED" }).Count
-
-    Write-Section -Text "Done"
-    Write-Host "Output:" -ForegroundColor Gray
-    Write-Host $outputFullPath -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Summary:" -ForegroundColor Gray
-    $failColor = "Gray"
-    if ($failCount -gt 0) {
-        $failColor = "Red"
+    $retryChoice = Get-DeferredRetryChoice -Results $results.ToArray()
+    if ($retryChoice -eq "Retry") {
+        Invoke-DeferredRetryPass -Results $results -TimeoutSeconds $RetryTimeoutSeconds
+        Write-BundleOutput -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -OutputPath $outputFullPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
+        Write-Summary -Title "Retry Completed" -OutputPath $outputFullPath -Results $results.ToArray()
+    }
+    elseif (@($results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" }).Count -gt 0) {
+        Write-Info -Text "Deferred retry skipped."
     }
 
-    Write-Host ("OK:          {0}" -f $okCount) -ForegroundColor Green
-    Write-Host ("Failed:      {0}" -f $failCount) -ForegroundColor $failColor
-    Write-Host ("Unsupported: {0}" -f $unsupportedCount) -ForegroundColor DarkYellow
-    Write-Host ("Total:       {0}" -f $results.Count) -ForegroundColor Gray
-
-    if ($script:ScanMessages.Count -gt 0) {
-        Write-Warn -Text ("Scan messages: {0}" -f $script:ScanMessages.Count)
-    }
-
-    if ($failCount -gt 0 -or $script:ScanMessages.Count -gt 0) {
+    $counts = Get-ResultCounts -Results $results.ToArray()
+    if ($counts.Failed -gt 0 -or $counts.Deferred -gt 0 -or $script:ScanMessages.Count -gt 0) {
         $script:ExitCode = 1
     }
 }
 
 try {
-    Invoke-PromptPack
+    if ($Worker) {
+        Invoke-WorkerMode
+    }
+    else {
+        Invoke-PromptPack
+    }
 }
 catch {
-    Write-Section -Text "Error"
-    Write-Fail -Text $_.Exception.Message
+    if (-not $Worker) {
+        Write-Section -Text "Error"
+        Write-Fail -Text $_.Exception.Message
+    }
     $script:ExitCode = 1
 }
 finally {
