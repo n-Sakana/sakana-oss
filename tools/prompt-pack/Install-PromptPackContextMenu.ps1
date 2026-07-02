@@ -12,26 +12,45 @@ if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) {
 }
 
 $targets = @(
-    "HKCU:\Software\Classes\*\shell\PromptPack",
-    "HKCU:\Software\Classes\Directory\shell\PromptPack"
+    "Software\Classes\*\shell\PromptPack",
+    "Software\Classes\Directory\shell\PromptPack"
 )
 
 $command = '"' + $runner + '" "%1"'
+$registryRoot = [Microsoft.Win32.Registry]::CurrentUser
 
 foreach ($target in $targets) {
-    $commandKey = $target + "\command"
-    [void](New-Item -LiteralPath $target -Force)
-    [void](New-Item -LiteralPath $commandKey -Force)
-    Set-Item -LiteralPath $target -Value "Run PromptPack"
-    New-ItemProperty -LiteralPath $target -Name "MUIVerb" -Value "Run PromptPack" -PropertyType String -Force | Out-Null
-    New-ItemProperty -LiteralPath $target -Name "Icon" -Value $runner -PropertyType String -Force | Out-Null
-    New-ItemProperty -LiteralPath $target -Name "InstallPath" -Value ($root + [System.IO.Path]::DirectorySeparatorChar) -PropertyType String -Force | Out-Null
-    New-ItemProperty -LiteralPath $target -Name "ScriptPath" -Value $runner -PropertyType String -Force | Out-Null
-    Set-Item -LiteralPath $commandKey -Value $command
+    $key = $registryRoot.CreateSubKey($target)
+    if ($null -eq $key) {
+        throw "Failed to create registry key: HKCU\$target"
+    }
+
+    try {
+        $key.SetValue("", "Run PromptPack", [Microsoft.Win32.RegistryValueKind]::String)
+        $key.SetValue("MUIVerb", "Run PromptPack", [Microsoft.Win32.RegistryValueKind]::String)
+        $key.SetValue("Icon", $runner, [Microsoft.Win32.RegistryValueKind]::String)
+        $key.SetValue("InstallPath", ($root + [System.IO.Path]::DirectorySeparatorChar), [Microsoft.Win32.RegistryValueKind]::String)
+        $key.SetValue("ScriptPath", $runner, [Microsoft.Win32.RegistryValueKind]::String)
+    }
+    finally {
+        $key.Close()
+    }
+
+    $commandKey = $registryRoot.CreateSubKey($target + "\command")
+    if ($null -eq $commandKey) {
+        throw "Failed to create registry key: HKCU\$target\command"
+    }
+
+    try {
+        $commandKey.SetValue("", $command, [Microsoft.Win32.RegistryValueKind]::String)
+    }
+    finally {
+        $commandKey.Close()
+    }
 }
 
 Write-Host "PromptPack context menu installed for current user." -ForegroundColor Green
 Write-Host "Registry keys:" -ForegroundColor Gray
 foreach ($target in $targets) {
-    Write-Host ("- " + $target.Replace("HKCU:", "HKCU")) -ForegroundColor Gray
+    Write-Host ("- HKCU\" + $target) -ForegroundColor Gray
 }

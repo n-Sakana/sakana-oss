@@ -5,13 +5,17 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
 $targets = @(
-    "HKCU:\Software\Classes\*\shell\PromptPack",
-    "HKCU:\Software\Classes\Directory\shell\PromptPack"
+    "Software\Classes\*\shell\PromptPack",
+    "Software\Classes\Directory\shell\PromptPack"
 )
 
+$registryRoot = [Microsoft.Win32.Registry]::CurrentUser
+
 foreach ($target in $targets) {
-    if (Test-Path -LiteralPath $target) {
-        Remove-Item -LiteralPath $target -Recurse -Force
+    $key = $registryRoot.OpenSubKey($target)
+    if ($null -ne $key) {
+        $key.Close()
+        $registryRoot.DeleteSubKeyTree($target)
     }
 }
 
