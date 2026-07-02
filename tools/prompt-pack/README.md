@@ -7,6 +7,7 @@ PromptPack bundles files and folders into one structured text file for generativ
 - `PromptPack.bat` — drag-and-drop entry point for Windows
 - `PromptPack.ps1` — extraction and bundling script
 - `SPEC.md` — v1 specification
+- `IMPROVEMENT_PLAN.md` — planned performance and UX improvements
 
 ## Usage
 
@@ -62,3 +63,13 @@ For unattended tests, use `-DeferredAction Skip`.
 - PDF files are opened directly with Word COM using the same resolved input path as other file types. No PDF-only temporary path rewrite, direct text pre-pass, or converter format override is used.
 - Script-generated labels and console messages are English-only.
 - Microsoft Office is required for Office files and for PDF OCR/import.
+
+## Planned improvements
+
+See `IMPROVEMENT_PLAN.md` for the next planned changes:
+
+- Faster text-file extraction through a parent-process fast path.
+- Direct PDF text-layer extraction before Word OCR, using Windows-standard capabilities only.
+- Clearer console phases, spinner activity, and progress details.
+- Optional HKCU Explorer context menu install/uninstall.
+- Output files under `tools/prompt-pack/output/`.
