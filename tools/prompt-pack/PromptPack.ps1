@@ -77,21 +77,21 @@ public static class PromptPackNativeHelper
 
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
         {
-            result.Content = Encoding.UTF8.GetString(bytes);
+            result.Content = Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
             result.EncodingName = "UTF-8 BOM";
             return result;
         }
 
         if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
         {
-            result.Content = Encoding.Unicode.GetString(bytes);
+            result.Content = Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
             result.EncodingName = "UTF-16 LE";
             return result;
         }
 
         if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
         {
-            result.Content = Encoding.BigEndianUnicode.GetString(bytes);
+            result.Content = Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
             result.EncodingName = "UTF-16 BE";
             return result;
         }
@@ -484,14 +484,12 @@ public static class PromptPackNativeHelper
 
             if (inTextObject && IsTokenAt(content, index, "Td"))
             {
-                output.AppendLine();
                 index += 2;
                 continue;
             }
 
             if (inTextObject && IsTokenAt(content, index, "TD"))
             {
-                output.AppendLine();
                 index += 2;
                 continue;
             }
