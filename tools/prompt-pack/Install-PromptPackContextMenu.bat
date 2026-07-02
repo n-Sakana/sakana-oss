@@ -3,7 +3,7 @@ setlocal EnableExtensions
 
 if /I not "%PROMPTPACK_NO_RELAUNCH%"=="1" (
     if /I not "%~1"=="--inner" (
-        start "PromptPack Installer" "%ComSpec%" /d /k call "%~f0" --inner
+        start "PromptPack Installer" /D "%~dp0" "%ComSpec%" /d /k call "%~f0" --inner
         exit /b 0
     )
 )
