@@ -1,0 +1,480 @@
+# AI Context Bundle Builder Specification v1
+
+## 1. Purpose
+
+AI Context Bundle Builder converts multiple files and folders into a single structured text file that can be attached to generative AI chat tools.
+
+Typical use cases:
+
+- Provide a set of documents to Copilot / ChatGPT / Claude / Gemini
+- Work around limits on attachment count, file formats, or file size
+- Bundle Office files, PDFs, and text files into one `.txt`
+- Preserve file paths, file structure, extracted contents, and extraction failures
+- Do not summarize, compress, truncate, or modify the source content
+
+This tool is a bundler, not a summarizer.
+
+---
+
+## 2. Deliverables
+
+The final tool will contain two files:
+
+- `drop-to-ai-text.bat`
+- `Convert-ToAiText.ps1`
+
+Roles:
+
+- `drop-to-ai-text.bat`
+  - Receives files and folders by drag-and-drop
+  - Requires no administrator privileges
+  - Starts PowerShell with `ExecutionPolicy Bypass`
+
+- `Convert-ToAiText.ps1`
+  - Collects input files
+  - Extracts text content
+  - Builds a structured output text file
+  - Shows progress and final results in the console
+
+This specification file is saved first. Implementation files are not included in v1 planning output.
+
+---
+
+## 3. Execution Flow
+
+User operation:
+
+1. Drag files or folders onto `drop-to-ai-text.bat`
+2. PowerShell starts
+3. The script scans input paths
+4. The script extracts contents from supported files
+5. The script writes a single `.txt` output file
+6. The console shows the output path and extraction summary
+
+Expected `.bat` shape:
+
+```bat
+@echo off
+setlocal
+
+set "SCRIPT=%~dp0Convert-ToAiText.ps1"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
+
+pause
+```
+
+The `.bat` file itself must contain English text only.
+
+---
+
+## 4. Target Environment
+
+- Windows
+- PowerShell 5.1 or later
+- Microsoft Office installed
+- No administrator privileges required
+
+Office COM automation is used for Office documents and PDF import through Word.
+
+---
+
+## 5. Supported File Types
+
+### 5.1 Text Files
+
+Supported examples:
+
+- `.txt`
+- `.md`
+- `.csv`
+- `.json`
+- `.xml`
+- `.html`
+- `.htm`
+- `.css`
+- `.js`
+- `.ts`
+- `.py`
+- `.ps1`
+- `.bat`
+- `.cmd`
+- `.sql`
+- `.yaml`
+- `.yml`
+- `.ini`
+- `.log`
+
+Processing rules:
+
+- Read as text
+- Preserve content as much as possible
+- Try common encodings such as UTF-8, UTF-8 BOM, UTF-16 LE, and CP932
+- If the file cannot be decoded, record it as a failed file
+
+### 5.2 Word
+
+Supported:
+
+- `.docx`
+- `.doc`
+
+Processing rules:
+
+- Open with Word COM
+- Extract document text
+- Add the extracted text under a clear file boundary
+
+### 5.3 Excel
+
+Supported:
+
+- `.xlsx`
+- `.xls`
+- `.xlsm`
+
+Processing rules:
+
+- Open with Excel COM
+- Extract each worksheet separately
+- Write sheet names
+- Output cell values in a tab-separated or CSV-like text form
+
+### 5.4 PowerPoint
+
+Supported:
+
+- `.pptx`
+- `.ppt`
+
+Processing rules:
+
+- Open with PowerPoint COM
+- Extract text from slides
+- Write slide numbers clearly
+
+### 5.5 PDF
+
+Supported:
+
+- `.pdf`
+
+Processing rules:
+
+- Open the PDF with Word COM
+- Let Word handle PDF conversion and OCR
+- Extract text from the opened Word document
+- Support scanned or handwritten PDFs as far as Word can recognize them
+
+Rules:
+
+- No separate OCR engine in v1
+- No Tesseract integration in v1
+- No Azure OCR integration in v1
+- If Word cannot extract usable text, record the failure or low-quality result explicitly
+
+---
+
+## 6. Folder Handling
+
+When a folder is dropped:
+
+- Recursively collect supported files
+- Preserve folder structure in the output
+- Record unsupported or failed files when relevant
+
+Default exclusions should be minimal.
+
+Possible obvious exclusions:
+
+- `.git`
+- `node_modules`
+- `.venv`
+- `__pycache__`
+
+v1 must not silently reduce the content by file size, importance, or estimated token count.
+
+---
+
+## 7. Path Handling
+
+This is a critical requirement.
+
+The tool must work with OneDrive and SharePoint synchronized folders.
+
+Path cases to support:
+
+- Spaces
+- Japanese characters
+- Parentheses
+- `#`
+- `&`
+- Long folder names
+- Deep SharePoint-derived paths
+
+Implementation rules:
+
+- Always quote the PowerShell script path in the `.bat`
+- In PowerShell, use `-LiteralPath` for path-based operations
+- Do not build executable command strings by concatenating paths
+- Do not use `Invoke-Expression`
+- Use `Join-Path` when constructing output paths
+- Treat input paths as literal strings
+
+---
+
+## 8. Output File
+
+Output format:
+
+- Single `.txt`
+- UTF-8
+- Structured text
+- Directly attachable to AI chat tools
+
+Example file name:
+
+```text
+ai-context_20260702_111530.txt
+```
+
+Output location:
+
+- Use the first input path as the base location
+- If the first input is a file, output next to that file
+- If the first input is a folder, output inside that folder or next to it according to implementation convenience
+- Use safe path construction with `Join-Path`
+
+---
+
+## 9. Output Text Structure
+
+All output labels and headings generated by the script must be English.
+
+Example:
+
+```text
+# AI Context Bundle
+
+Generated At: 2026-07-02 11:15:30
+Tool: Convert-ToAiText.ps1
+Total Files: 12
+Succeeded: 10
+Failed: 2
+
+---
+
+## Input Paths
+
+- C:\Users\...\Documents\Project
+- C:\Users\...\Desktop\memo.docx
+
+---
+
+## File Tree
+
+Project/
+  proposal.pdf
+  notes.md
+  data.xlsx
+
+---
+
+## Extraction Summary
+
+| No | Status | Type | Path | Method | Notes |
+|---:|---|---|---|---|---|
+| 1 | OK | PDF | C:\...\proposal.pdf | Word PDF Import | |
+| 2 | OK | Markdown | C:\...\notes.md | Text Read | UTF-8 |
+| 3 | FAIL | Excel | C:\...\locked.xlsx | Excel COM | Password protected |
+
+---
+
+## Contents
+
+### File 1
+
+Path: C:\...\proposal.pdf
+Type: PDF
+Method: Word PDF Import
+Status: OK
+
+[Extracted text here]
+
+---
+
+### File 2
+
+Path: C:\...\notes.md
+Type: Markdown
+Method: Text Read
+Status: OK
+
+[Extracted text here]
+
+---
+
+## Failed Files
+
+### Failed File 1
+
+Path: C:\...\locked.xlsx
+Type: Excel
+Status: FAIL
+Reason: Password protected or cannot be opened
+```
+
+---
+
+## 10. Language Rules for Scripts
+
+The script files themselves must not contain Japanese text.
+
+English-only targets:
+
+- Variable names
+- Function names
+- Comments
+- Console logs
+- Error messages
+- Output headings
+- Output labels
+- `.bat` text
+
+Extracted source document text may contain Japanese or any other language.
+
+---
+
+## 11. Console Display
+
+The console must show visible progress while running.
+
+Rules:
+
+- English only
+- Modern and readable
+- Color-coded where practical
+- No emoji
+- Avoid decorations that are likely to cause mojibake
+- Show the final output path
+- Show the final extraction summary
+
+Example:
+
+```text
+AI Context Bundle Builder
+-------------------------
+
+[SCAN] Collecting files...
+[INFO] 12 files found
+
+[01/12] TXT   OK     notes.md
+[02/12] DOCX  OK     proposal.docx
+[03/12] PDF   OK     handwritten-form.pdf
+[04/12] XLSX  OK     data.xlsx
+[05/12] PDF   FAIL   locked.pdf
+
+Progress: 5 / 12
+
+-------------------------
+Done.
+
+Output:
+C:\Users\...\ai-context_20260702_111530.txt
+
+Summary:
+OK:      10
+Failed:  2
+Total:   12
+```
+
+PowerShell may use `Write-Host` with colors and `Write-Progress` if it does not make output harder to read.
+
+---
+
+## 12. Error Handling
+
+The tool must not silently skip failed files.
+
+For each failed file, record:
+
+- Path
+- File type
+- Method
+- Status
+- Failure reason
+
+Expected error cases:
+
+- File cannot be opened
+- Password-protected file
+- Office COM failure
+- Broken file
+- Unsupported extension
+- Encoding detection failure
+- Permission problem
+
+Failure records must appear both in the extraction summary and in the failed files section.
+
+---
+
+## 13. Non-Goals for v1
+
+v1 does not do the following:
+
+- Automatic summarization
+- Automatic compression
+- Truncation by size
+- Importance ranking
+- Content rewriting for AI
+- Dedicated PDF OCR engine
+- Tesseract integration
+- Azure OCR integration
+- Image embedding
+- GUI app
+- Installer
+
+The tool only bundles source content into one structured text file.
+
+---
+
+## 14. Implementation Outline
+
+Expected PowerShell functions:
+
+- `Read-TextFile`
+- `Read-WordFile`
+- `Read-ExcelFile`
+- `Read-PowerPointFile`
+- `Read-PdfFileWithWord`
+- `Write-ConsoleStatus`
+- `Build-OutputText`
+
+Expected high-level process:
+
+1. Receive drag-and-drop paths through `param`
+2. Validate inputs with `Get-Item -LiteralPath`
+3. Recursively collect supported files from folders
+4. Build file tree data
+5. Dispatch each file by extension
+6. Store extraction result objects
+7. Build structured output text
+8. Write the `.txt` file
+9. Show final summary in the console
+
+---
+
+## 15. Completion Criteria
+
+v1 is complete when:
+
+- Drag-and-drop of files onto `.bat` works
+- Drag-and-drop of folders onto `.bat` works
+- OneDrive / SharePoint synchronized paths work
+- Word, Excel, PowerPoint, PDF, and text files are processed
+- PDF text is extracted through Word PDF import / OCR
+- A single `.txt` file is generated
+- The output contains file tree, summary, contents, and failed files
+- The console shows progress and final results
+- Script-generated labels are English-only
+- Source content is not silently summarized, compressed, or truncated
