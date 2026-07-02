@@ -29,6 +29,9 @@ $script:TextExtensions = @(
     ".config", ".toml", ".vbs", ".bas"
 )
 
+$script:WordOpenXmlExtensions = @(".docx", ".docm")
+$script:ExcelOpenXmlExtensions = @(".xlsx", ".xlsm")
+$script:PowerPointOpenXmlExtensions = @(".pptx", ".pptm")
 $script:WordExtensions = @(".docx", ".doc", ".docm", ".rtf")
 $script:ExcelExtensions = @(".xlsx", ".xls", ".xlsm", ".xlsb")
 $script:PowerPointExtensions = @(".pptx", ".ppt", ".pptm")
@@ -44,6 +47,7 @@ $script:WorkerStagePath = ""
 $script:WorkerPidPath = ""
 $script:OwnedOfficePids = New-Object "System.Collections.Generic.HashSet[int]"
 $script:NativeHelperLoaded = $false
+$script:ForceComExtraction = $false
 
 function Initialize-NativeHelper {
     if ($script:NativeHelperLoaded) {
@@ -57,13 +61,23 @@ function Initialize-NativeHelper {
 
     $source = @'
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml;
 
 public sealed class PromptPackTextResult
 {
     public string Content;
     public string EncodingName;
+}
+
+public sealed class PromptPackOpenXmlResult
+{
+    public string Content;
+    public string Notes;
 }
 
 public static class PromptPackNativeHelper
@@ -118,10 +132,657 @@ public static class PromptPackNativeHelper
             return result;
         }
     }
+
+    public static PromptPackOpenXmlResult ReadWordOpenXml(string path)
+    {
+        StringBuilder builder = new StringBuilder();
+        int partCount = 0;
+
+        using (FileStream stream = File.OpenRead(path))
+        using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read))
+        {
+            string[] entries = new string[] {
+                "word/document.xml",
+                "word/footnotes.xml",
+                "word/endnotes.xml",
+                "word/comments.xml"
+            };
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                ZipArchiveEntry entry = GetEntry(archive, entries[i]);
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                AppendWordPart(archive, entry.FullName, GetWordPartLabel(entry.FullName), builder);
+                partCount++;
+            }
+
+            partCount += AppendMatchingWordParts(archive, @"^word/headers/header[0-9]+\.xml$", "Header", builder);
+            partCount += AppendMatchingWordParts(archive, @"^word/footers/footer[0-9]+\.xml$", "Footer", builder);
+        }
+
+        PromptPackOpenXmlResult result = new PromptPackOpenXmlResult();
+        result.Content = TrimEndLines(builder.ToString());
+        result.Notes = "OpenXML parts: " + partCount.ToString();
+        if (String.IsNullOrWhiteSpace(result.Content))
+        {
+            result.Notes += "; No text extracted";
+        }
+        return result;
+    }
+
+    public static PromptPackOpenXmlResult ReadPowerPointOpenXml(string path)
+    {
+        StringBuilder builder = new StringBuilder();
+        int slideCount = 0;
+        int noteCount = 0;
+
+        using (FileStream stream = File.OpenRead(path))
+        using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read))
+        {
+            List<ZipArchiveEntry> slides = GetMatchingEntries(archive, @"^ppt/slides/slide[0-9]+\.xml$");
+            slides.Sort(CompareEntryNumber);
+
+            foreach (ZipArchiveEntry entry in slides)
+            {
+                int number = GetLastNumber(entry.FullName);
+                if (builder.Length > 0)
+                {
+                    builder.AppendLine();
+                }
+                builder.AppendLine("## Slide " + number.ToString());
+                AppendPresentationXml(entry, builder);
+                slideCount++;
+            }
+
+            List<ZipArchiveEntry> notes = GetMatchingEntries(archive, @"^ppt/notesSlides/notesSlide[0-9]+\.xml$");
+            notes.Sort(CompareEntryNumber);
+
+            foreach (ZipArchiveEntry entry in notes)
+            {
+                int number = GetLastNumber(entry.FullName);
+                if (builder.Length > 0)
+                {
+                    builder.AppendLine();
+                }
+                builder.AppendLine("## Notes " + number.ToString());
+                AppendPresentationXml(entry, builder);
+                noteCount++;
+            }
+        }
+
+        PromptPackOpenXmlResult result = new PromptPackOpenXmlResult();
+        result.Content = TrimEndLines(builder.ToString());
+        result.Notes = "Slides: " + slideCount.ToString() + "; Notes: " + noteCount.ToString();
+        if (String.IsNullOrWhiteSpace(result.Content))
+        {
+            result.Notes += "; No text extracted";
+        }
+        return result;
+    }
+
+    public static PromptPackOpenXmlResult ReadExcelOpenXml(string path)
+    {
+        StringBuilder builder = new StringBuilder();
+        int sheetCount = 0;
+
+        using (FileStream stream = File.OpenRead(path))
+        using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read))
+        {
+            List<string> sharedStrings = LoadSharedStrings(archive);
+            List<SheetInfo> sheets = LoadWorkbookSheets(archive);
+
+            if (sheets.Count == 0)
+            {
+                List<ZipArchiveEntry> sheetEntries = GetMatchingEntries(archive, @"^xl/worksheets/sheet[0-9]+\.xml$");
+                sheetEntries.Sort(CompareEntryNumber);
+                foreach (ZipArchiveEntry entry in sheetEntries)
+                {
+                    sheets.Add(new SheetInfo(entry.FullName, Path.GetFileNameWithoutExtension(entry.FullName)));
+                }
+            }
+
+            foreach (SheetInfo sheet in sheets)
+            {
+                ZipArchiveEntry entry = GetEntry(archive, sheet.Path);
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                if (builder.Length > 0)
+                {
+                    builder.AppendLine();
+                }
+                builder.AppendLine("## Sheet: " + sheet.Name);
+                AppendWorksheetXml(entry, sharedStrings, builder);
+                sheetCount++;
+            }
+        }
+
+        PromptPackOpenXmlResult result = new PromptPackOpenXmlResult();
+        result.Content = TrimEndLines(builder.ToString());
+        result.Notes = "Sheets: " + sheetCount.ToString();
+        if (String.IsNullOrWhiteSpace(result.Content))
+        {
+            result.Notes += "; No text extracted";
+        }
+        return result;
+    }
+
+    private sealed class SheetInfo
+    {
+        public string Path;
+        public string Name;
+
+        public SheetInfo(string path, string name)
+        {
+            Path = NormalizePackagePath(path);
+            Name = name;
+        }
+    }
+
+    private static void AppendWordPart(ZipArchive archive, string entryName, string label, StringBuilder builder)
+    {
+        ZipArchiveEntry entry = GetEntry(archive, entryName);
+        if (entry == null)
+        {
+            return;
+        }
+
+        if (builder.Length > 0)
+        {
+            builder.AppendLine();
+        }
+        builder.AppendLine("## " + label);
+        XmlDocument document = LoadEntryXml(entry);
+        AppendWordNode(document.DocumentElement, builder);
+    }
+
+    private static int AppendMatchingWordParts(ZipArchive archive, string pattern, string labelPrefix, StringBuilder builder)
+    {
+        int count = 0;
+        List<ZipArchiveEntry> entries = GetMatchingEntries(archive, pattern);
+        entries.Sort(CompareEntryNumber);
+        foreach (ZipArchiveEntry entry in entries)
+        {
+            string label = labelPrefix + " " + GetLastNumber(entry.FullName).ToString();
+            AppendWordPart(archive, entry.FullName, label, builder);
+            count++;
+        }
+        return count;
+    }
+
+    private static string GetWordPartLabel(string entryName)
+    {
+        if (entryName.EndsWith("/document.xml", StringComparison.OrdinalIgnoreCase)) return "Document";
+        if (entryName.EndsWith("/footnotes.xml", StringComparison.OrdinalIgnoreCase)) return "Footnotes";
+        if (entryName.EndsWith("/endnotes.xml", StringComparison.OrdinalIgnoreCase)) return "Endnotes";
+        if (entryName.EndsWith("/comments.xml", StringComparison.OrdinalIgnoreCase)) return "Comments";
+        return entryName;
+    }
+
+    private static void AppendWordNode(XmlNode node, StringBuilder builder)
+    {
+        if (node == null)
+        {
+            return;
+        }
+
+        string localName = node.LocalName;
+        if (localName == "t" || localName == "instrText" || localName == "delText")
+        {
+            builder.Append(node.InnerText);
+            return;
+        }
+        if (localName == "tab")
+        {
+            builder.Append('\t');
+            return;
+        }
+        if (localName == "br" || localName == "cr")
+        {
+            builder.AppendLine();
+            return;
+        }
+
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            AppendWordNode(child, builder);
+        }
+
+        if (localName == "p" || localName == "tr")
+        {
+            AppendLineIfNeeded(builder);
+        }
+        else if (localName == "tc")
+        {
+            builder.Append('\t');
+        }
+    }
+
+    private static void AppendPresentationXml(ZipArchiveEntry entry, StringBuilder builder)
+    {
+        XmlDocument document = LoadEntryXml(entry);
+        AppendPresentationNode(document.DocumentElement, builder);
+    }
+
+    private static void AppendPresentationNode(XmlNode node, StringBuilder builder)
+    {
+        if (node == null)
+        {
+            return;
+        }
+
+        string localName = node.LocalName;
+        if (localName == "t")
+        {
+            builder.Append(node.InnerText);
+            return;
+        }
+        if (localName == "br")
+        {
+            builder.AppendLine();
+            return;
+        }
+
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            AppendPresentationNode(child, builder);
+        }
+
+        if (localName == "p")
+        {
+            AppendLineIfNeeded(builder);
+        }
+    }
+
+    private static List<string> LoadSharedStrings(ZipArchive archive)
+    {
+        List<string> values = new List<string>();
+        ZipArchiveEntry entry = GetEntry(archive, "xl/sharedStrings.xml");
+        if (entry == null)
+        {
+            return values;
+        }
+
+        XmlDocument document = LoadEntryXml(entry);
+        List<XmlNode> items = new List<XmlNode>();
+        CollectNodesByLocalName(document.DocumentElement, "si", items);
+        foreach (XmlNode item in items)
+        {
+            values.Add(CollapseCellText(CollectTextFromNode(item)));
+        }
+        return values;
+    }
+
+    private static List<SheetInfo> LoadWorkbookSheets(ZipArchive archive)
+    {
+        List<SheetInfo> sheets = new List<SheetInfo>();
+        ZipArchiveEntry workbookEntry = GetEntry(archive, "xl/workbook.xml");
+        if (workbookEntry == null)
+        {
+            return sheets;
+        }
+
+        Dictionary<string, string> relationships = LoadWorkbookRelationships(archive);
+        XmlDocument document = LoadEntryXml(workbookEntry);
+        List<XmlNode> sheetNodes = new List<XmlNode>();
+        CollectNodesByLocalName(document.DocumentElement, "sheet", sheetNodes);
+
+        foreach (XmlNode sheetNode in sheetNodes)
+        {
+            string name = GetAttributeValue(sheetNode, "name");
+            string relationshipId = GetAttributeValue(sheetNode, "id");
+            if (String.IsNullOrEmpty(name))
+            {
+                name = "Sheet " + (sheets.Count + 1).ToString();
+            }
+
+            string target;
+            if (!String.IsNullOrEmpty(relationshipId) && relationships.TryGetValue(relationshipId, out target))
+            {
+                sheets.Add(new SheetInfo(target, name));
+            }
+        }
+
+        return sheets;
+    }
+
+    private static Dictionary<string, string> LoadWorkbookRelationships(ZipArchive archive)
+    {
+        Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        ZipArchiveEntry relsEntry = GetEntry(archive, "xl/_rels/workbook.xml.rels");
+        if (relsEntry == null)
+        {
+            return map;
+        }
+
+        XmlDocument document = LoadEntryXml(relsEntry);
+        List<XmlNode> relationships = new List<XmlNode>();
+        CollectNodesByLocalName(document.DocumentElement, "Relationship", relationships);
+        foreach (XmlNode relationship in relationships)
+        {
+            string id = GetAttributeValue(relationship, "Id");
+            string target = GetAttributeValue(relationship, "Target");
+            if (String.IsNullOrEmpty(id) || String.IsNullOrEmpty(target))
+            {
+                continue;
+            }
+            map[id] = NormalizeWorkbookTarget(target);
+        }
+        return map;
+    }
+
+    private static void AppendWorksheetXml(ZipArchiveEntry entry, List<string> sharedStrings, StringBuilder builder)
+    {
+        XmlDocument document = LoadEntryXml(entry);
+        List<XmlNode> rows = new List<XmlNode>();
+        CollectNodesByLocalName(document.DocumentElement, "row", rows);
+
+        foreach (XmlNode row in rows)
+        {
+            SortedDictionary<int, string> cells = new SortedDictionary<int, string>();
+            int fallbackColumn = 1;
+            foreach (XmlNode child in row.ChildNodes)
+            {
+                if (child.LocalName != "c")
+                {
+                    continue;
+                }
+
+                string reference = GetAttributeValue(child, "r");
+                int columnIndex = GetColumnIndex(reference);
+                if (columnIndex <= 0)
+                {
+                    columnIndex = fallbackColumn;
+                }
+
+                cells[columnIndex] = ReadCellValue(child, sharedStrings);
+                fallbackColumn = columnIndex + 1;
+            }
+
+            if (cells.Count == 0)
+            {
+                builder.AppendLine();
+                continue;
+            }
+
+            int maxColumn = 0;
+            foreach (int column in cells.Keys)
+            {
+                if (column > maxColumn) maxColumn = column;
+            }
+
+            string[] values = new string[maxColumn];
+            for (int i = 0; i < values.Length; i++) values[i] = "";
+            foreach (KeyValuePair<int, string> cell in cells)
+            {
+                if (cell.Key > 0 && cell.Key <= values.Length)
+                {
+                    values[cell.Key - 1] = CollapseCellText(cell.Value);
+                }
+            }
+            builder.AppendLine(String.Join("\t", values));
+        }
+    }
+
+    private static string ReadCellValue(XmlNode cell, List<string> sharedStrings)
+    {
+        string type = GetAttributeValue(cell, "t");
+        if (String.Equals(type, "inlineStr", StringComparison.OrdinalIgnoreCase))
+        {
+            return CollectTextFromNode(cell);
+        }
+
+        XmlNode valueNode = FindFirstDescendantByLocalName(cell, "v");
+        string rawValue = valueNode == null ? "" : valueNode.InnerText;
+
+        if (String.Equals(type, "s", StringComparison.OrdinalIgnoreCase))
+        {
+            int index;
+            if (Int32.TryParse(rawValue, out index) && index >= 0 && index < sharedStrings.Count)
+            {
+                return sharedStrings[index];
+            }
+            return rawValue;
+        }
+
+        if (String.Equals(type, "str", StringComparison.OrdinalIgnoreCase))
+        {
+            return rawValue;
+        }
+
+        return rawValue;
+    }
+
+    private static string CollectTextFromNode(XmlNode node)
+    {
+        StringBuilder builder = new StringBuilder();
+        CollectTextFromNode(node, builder);
+        return builder.ToString();
+    }
+
+    private static void CollectTextFromNode(XmlNode node, StringBuilder builder)
+    {
+        if (node == null)
+        {
+            return;
+        }
+        if (node.LocalName == "t")
+        {
+            builder.Append(node.InnerText);
+            return;
+        }
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            CollectTextFromNode(child, builder);
+        }
+    }
+
+    private static void CollectNodesByLocalName(XmlNode node, string localName, List<XmlNode> results)
+    {
+        if (node == null)
+        {
+            return;
+        }
+        if (node.LocalName == localName)
+        {
+            results.Add(node);
+        }
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            CollectNodesByLocalName(child, localName, results);
+        }
+    }
+
+    private static XmlNode FindFirstDescendantByLocalName(XmlNode node, string localName)
+    {
+        if (node == null)
+        {
+            return null;
+        }
+        if (node.LocalName == localName)
+        {
+            return node;
+        }
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            XmlNode found = FindFirstDescendantByLocalName(child, localName);
+            if (found != null)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private static string GetAttributeValue(XmlNode node, string localName)
+    {
+        if (node == null || node.Attributes == null)
+        {
+            return "";
+        }
+        foreach (XmlAttribute attribute in node.Attributes)
+        {
+            if (attribute.LocalName == localName || attribute.Name == localName)
+            {
+                return attribute.Value;
+            }
+        }
+        return "";
+    }
+
+    private static int GetColumnIndex(string cellReference)
+    {
+        if (String.IsNullOrEmpty(cellReference))
+        {
+            return 0;
+        }
+
+        int result = 0;
+        foreach (char ch in cellReference.ToUpperInvariant())
+        {
+            if (ch < 'A' || ch > 'Z')
+            {
+                break;
+            }
+            result = (result * 26) + (ch - 'A' + 1);
+        }
+        return result;
+    }
+
+    private static string CollapseCellText(string text)
+    {
+        if (text == null)
+        {
+            return "";
+        }
+        return text.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ").Replace("\t", " ").Trim();
+    }
+
+    private static string NormalizeWorkbookTarget(string target)
+    {
+        if (String.IsNullOrEmpty(target))
+        {
+            return target;
+        }
+        target = target.Replace('\\', '/');
+        if (target.StartsWith("/", StringComparison.Ordinal))
+        {
+            target = target.TrimStart('/');
+        }
+        else if (!target.StartsWith("xl/", StringComparison.OrdinalIgnoreCase))
+        {
+            target = "xl/" + target;
+        }
+        return NormalizePackagePath(target);
+    }
+
+    private static string NormalizePackagePath(string path)
+    {
+        return (path ?? "").Replace('\\', '/').TrimStart('/');
+    }
+
+    private static XmlDocument LoadEntryXml(ZipArchiveEntry entry)
+    {
+        XmlDocument document = new XmlDocument();
+        document.PreserveWhitespace = false;
+        document.XmlResolver = null;
+        using (Stream stream = entry.Open())
+        {
+            document.Load(stream);
+        }
+        return document;
+    }
+
+    private static ZipArchiveEntry GetEntry(ZipArchive archive, string name)
+    {
+        string normalizedName = NormalizePackagePath(name);
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            if (String.Equals(NormalizePackagePath(entry.FullName), normalizedName, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    private static List<ZipArchiveEntry> GetMatchingEntries(ZipArchive archive, string pattern)
+    {
+        Regex regex = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        List<ZipArchiveEntry> entries = new List<ZipArchiveEntry>();
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            string name = NormalizePackagePath(entry.FullName);
+            if (regex.IsMatch(name))
+            {
+                entries.Add(entry);
+            }
+        }
+        return entries;
+    }
+
+    private static int CompareEntryNumber(ZipArchiveEntry left, ZipArchiveEntry right)
+    {
+        int leftNumber = GetLastNumber(left.FullName);
+        int rightNumber = GetLastNumber(right.FullName);
+        int numberCompare = leftNumber.CompareTo(rightNumber);
+        if (numberCompare != 0)
+        {
+            return numberCompare;
+        }
+        return StringComparer.OrdinalIgnoreCase.Compare(left.FullName, right.FullName);
+    }
+
+    private static int GetLastNumber(string text)
+    {
+        if (String.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+        MatchCollection matches = Regex.Matches(text, "[0-9]+");
+        if (matches.Count == 0)
+        {
+            return 0;
+        }
+        int value;
+        if (Int32.TryParse(matches[matches.Count - 1].Value, out value))
+        {
+            return value;
+        }
+        return 0;
+    }
+
+    private static void AppendLineIfNeeded(StringBuilder builder)
+    {
+        if (builder.Length == 0)
+        {
+            return;
+        }
+        string current = builder.ToString();
+        if (!current.EndsWith("\n", StringComparison.Ordinal))
+        {
+            builder.AppendLine();
+        }
+    }
+
+    private static string TrimEndLines(string text)
+    {
+        if (text == null)
+        {
+            return "";
+        }
+        return text.TrimEnd('\r', '\n', '\t', ' ');
+    }
 }
 '@
 
-    Add-Type -TypeDefinition $source -Language CSharp
+    Add-Type -TypeDefinition $source -Language CSharp -ReferencedAssemblies @("System.IO.Compression.dll", "System.Xml.dll")
     $script:NativeHelperLoaded = $true
 }
 
@@ -360,6 +1021,36 @@ function Get-TypeCode {
     return $ext.TrimStart(".").ToUpperInvariant()
 }
 
+function Get-ExtensionLower {
+    param([string]$Path)
+
+    return [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+}
+
+function Test-WordOpenXmlFile {
+    param([string]$Path)
+
+    return ($script:WordOpenXmlExtensions -contains (Get-ExtensionLower -Path $Path))
+}
+
+function Test-ExcelOpenXmlFile {
+    param([string]$Path)
+
+    return ($script:ExcelOpenXmlExtensions -contains (Get-ExtensionLower -Path $Path))
+}
+
+function Test-PowerPointOpenXmlFile {
+    param([string]$Path)
+
+    return ($script:PowerPointOpenXmlExtensions -contains (Get-ExtensionLower -Path $Path))
+}
+
+function Test-OfficeOpenXmlFile {
+    param([string]$Path)
+
+    return ((Test-WordOpenXmlFile -Path $Path) -or (Test-ExcelOpenXmlFile -Path $Path) -or (Test-PowerPointOpenXmlFile -Path $Path))
+}
+
 function New-ExtractionResult {
     param(
         [int]$No,
@@ -390,10 +1081,16 @@ function Get-SuccessStatus {
     )
 
     if ($Kind -eq "Text") { return "OK_TEXT" }
-    if ($Kind -eq "Word") { return "OK_WORD" }
-    if ($Kind -eq "Excel") { return "OK_EXCEL" }
-    if ($Kind -eq "PowerPoint") { return "OK_POWERPOINT" }
-    if ($Kind -eq "PDF") { return "OK_WORD_PDF" }
+    if ($Method -eq "Word OpenXML/C#") { return "OK_DOCX_XML" }
+    if ($Method -eq "Excel OpenXML/C#") { return "OK_XLSX_XML" }
+    if ($Method -eq "PowerPoint OpenXML/C#") { return "OK_PPTX_XML" }
+    if ($Method -eq "Word COM fallback") { return "OK_WORD_COM_FALLBACK" }
+    if ($Method -eq "Excel COM fallback") { return "OK_EXCEL_COM_FALLBACK" }
+    if ($Method -eq "PowerPoint COM fallback") { return "OK_POWERPOINT_COM_FALLBACK" }
+    if ($Kind -eq "Word") { return "OK_WORD_COM" }
+    if ($Kind -eq "Excel") { return "OK_EXCEL_COM" }
+    if ($Kind -eq "PowerPoint") { return "OK_POWERPOINT_COM" }
+    if ($Kind -eq "PDF") { return "OK_PDF_WORD" }
 
     return "OK"
 }
@@ -409,6 +1106,48 @@ function Read-TextFile {
         Content = $data.Content
         Method = "Text Read"
         Notes = $data.EncodingName
+    }
+}
+
+function Read-WordOpenXmlFile {
+    param([string]$Path)
+
+    Set-WorkerStage -Stage "READ_DOCX_XML"
+    Initialize-NativeHelper
+    $data = [PromptPackNativeHelper]::ReadWordOpenXml($Path)
+
+    return [pscustomobject]@{
+        Content = $data.Content
+        Method = "Word OpenXML/C#"
+        Notes = $data.Notes
+    }
+}
+
+function Read-ExcelOpenXmlFile {
+    param([string]$Path)
+
+    Set-WorkerStage -Stage "READ_XLSX_XML"
+    Initialize-NativeHelper
+    $data = [PromptPackNativeHelper]::ReadExcelOpenXml($Path)
+
+    return [pscustomobject]@{
+        Content = $data.Content
+        Method = "Excel OpenXML/C#"
+        Notes = $data.Notes
+    }
+}
+
+function Read-PowerPointOpenXmlFile {
+    param([string]$Path)
+
+    Set-WorkerStage -Stage "READ_PPTX_XML"
+    Initialize-NativeHelper
+    $data = [PromptPackNativeHelper]::ReadPowerPointOpenXml($Path)
+
+    return [pscustomobject]@{
+        Content = $data.Content
+        Method = "PowerPoint OpenXML/C#"
+        Notes = $data.Notes
     }
 }
 
@@ -454,7 +1193,17 @@ function Read-WordLikeFile {
 
 function Read-WordFile {
     param([string]$Path)
-    return Read-WordLikeFile -Path $Path -Method "Word COM" -OpenStage "OPEN_DOCUMENT"
+
+    if ((-not $script:ForceComExtraction) -and (Test-WordOpenXmlFile -Path $Path)) {
+        return Read-WordOpenXmlFile -Path $Path
+    }
+
+    $method = "Word COM"
+    if ($script:ForceComExtraction -and (Test-WordOpenXmlFile -Path $Path)) {
+        $method = "Word COM fallback"
+    }
+
+    return Read-WordLikeFile -Path $Path -Method $method -OpenStage "OPEN_DOCUMENT"
 }
 
 function Read-PdfFileWithWord {
@@ -491,7 +1240,7 @@ function Format-CellText {
     return $text
 }
 
-function Read-ExcelFile {
+function Read-ExcelFileWithCom {
     param([string]$Path)
 
     $excel = Get-ExcelApplication
@@ -542,9 +1291,14 @@ function Read-ExcelFile {
             Release-ComObjectSafe -Object $worksheet
         }
 
+        $method = "Excel COM"
+        if ($script:ForceComExtraction -and (Test-ExcelOpenXmlFile -Path $Path)) {
+            $method = "Excel COM fallback"
+        }
+
         return [pscustomobject]@{
             Content = $builder.ToString()
-            Method = "Excel COM"
+            Method = $method
             Notes = "Worksheets: $($workbook.Worksheets.Count)"
         }
     }
@@ -555,6 +1309,16 @@ function Read-ExcelFile {
             Release-ComObjectSafe -Object $workbook
         }
     }
+}
+
+function Read-ExcelFile {
+    param([string]$Path)
+
+    if ((-not $script:ForceComExtraction) -and (Test-ExcelOpenXmlFile -Path $Path)) {
+        return Read-ExcelOpenXmlFile -Path $Path
+    }
+
+    return Read-ExcelFileWithCom -Path $Path
 }
 
 function Append-PowerPointShapeText {
@@ -603,7 +1367,7 @@ function Append-PowerPointShapeText {
     }
 }
 
-function Read-PowerPointFile {
+function Read-PowerPointFileWithCom {
     param([string]$Path)
 
     $powerPoint = Get-PowerPointApplication
@@ -629,9 +1393,14 @@ function Read-PowerPointFile {
             Release-ComObjectSafe -Object $slide
         }
 
+        $method = "PowerPoint COM"
+        if ($script:ForceComExtraction -and (Test-PowerPointOpenXmlFile -Path $Path)) {
+            $method = "PowerPoint COM fallback"
+        }
+
         return [pscustomobject]@{
             Content = $builder.ToString()
-            Method = "PowerPoint COM"
+            Method = $method
             Notes = "Slides: $($presentation.Slides.Count)"
         }
     }
@@ -642,6 +1411,16 @@ function Read-PowerPointFile {
             Release-ComObjectSafe -Object $presentation
         }
     }
+}
+
+function Read-PowerPointFile {
+    param([string]$Path)
+
+    if ((-not $script:ForceComExtraction) -and (Test-PowerPointOpenXmlFile -Path $Path)) {
+        return Read-PowerPointOpenXmlFile -Path $Path
+    }
+
+    return Read-PowerPointFileWithCom -Path $Path
 }
 
 function Invoke-FileExtraction {
@@ -705,6 +1484,10 @@ function Invoke-WorkerMode {
     $request = $requestJson | ConvertFrom-Json
     $script:WorkerStagePath = [string]$request.StagePath
     $script:WorkerPidPath = [string]$request.PidPath
+    $script:ForceComExtraction = $false
+    if ($request.PSObject.Properties.Name -contains "ForceCom") {
+        $script:ForceComExtraction = [bool]$request.ForceCom
+    }
 
     try {
         Set-WorkerStage -Stage "START_WORKER"
@@ -1054,7 +1837,8 @@ function Invoke-FileExtractionWithTimeout {
         [int]$No,
         [int]$TimeoutSeconds,
         [int]$Index = 0,
-        [int]$Total = 0
+        [int]$Total = 0,
+        [switch]$ForceCom
     )
 
     $jobRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "PromptPack"
@@ -1075,6 +1859,7 @@ function Invoke-FileExtractionWithTimeout {
             ResultPath = $resultPath
             StagePath = $stagePath
             PidPath = $pidPath
+            ForceCom = [bool]$ForceCom.IsPresent
         }
         ConvertTo-JsonFile -Data $request -Path $requestPath
 
@@ -1402,6 +2187,22 @@ function Invoke-OptimizedFileExtraction {
 
     if ($kind -eq "Text") {
         return Invoke-FileExtraction -File $File -No $No
+    }
+
+    if (Test-OfficeOpenXmlFile -Path $File.FullName) {
+        $xmlResult = Invoke-FileExtraction -File $File -No $No
+        if ($xmlResult.Status -ne "FAIL") {
+            return $xmlResult
+        }
+
+        $fallbackResult = Invoke-FileExtractionWithTimeout -File $File -No $No -TimeoutSeconds $TimeoutSeconds -Index $Index -Total $Total -ForceCom
+        if ([string]::IsNullOrWhiteSpace([string]$fallbackResult.Notes)) {
+            $fallbackResult.Notes = "OpenXML failed: $($xmlResult.Notes)"
+        }
+        else {
+            $fallbackResult.Notes = "$($fallbackResult.Notes); OpenXML failed: $($xmlResult.Notes)"
+        }
+        return $fallbackResult
     }
 
     return Invoke-FileExtractionWithTimeout -File $File -No $No -TimeoutSeconds $TimeoutSeconds -Index $Index -Total $Total

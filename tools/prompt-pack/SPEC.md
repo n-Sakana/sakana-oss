@@ -54,8 +54,8 @@ User operation:
 1. Drag files or folders onto `PromptPack.bat`
 2. PowerShell starts
 3. The script scans input paths
-4. The script extracts fast-path text files in the parent process
-5. Office-backed files and PDF Word import/OCR run in per-file worker processes
+4. The script extracts fast-path text and modern Office Open XML files in the parent process
+5. COM-backed files and PDF Word import/OCR run in per-file worker processes
 6. A per-file timeout prevents a single hung worker from blocking the whole run
 7. The script writes a single `.txt` output file under `output/` after the main pass
 8. If timeout-deferred files exist, the user can choose whether to retry them
@@ -85,7 +85,7 @@ The `.bat` file itself must contain English text only.
 - Microsoft Office installed
 - No administrator privileges required
 
-Office COM automation is used for Office documents and PDF OCR/import through Word.
+Office COM automation is used for legacy Office documents, Open XML fallback, and PDF OCR/import through Word.
 
 ---
 
@@ -133,8 +133,10 @@ Supported:
 
 Processing rules:
 
-- Open with Word COM
-- Extract document text
+- `.docx` and `.docm` are read through the built-in C# Open XML helper
+- The helper reads ZIP/XML package entries directly without extracting folders to disk
+- `.doc` and `.rtf` are opened with Word COM
+- If Open XML extraction fails, retry through Word COM as a fallback and record the fallback reason
 - Add the extracted text under a clear file boundary
 
 ### 5.3 Excel
@@ -148,7 +150,10 @@ Supported:
 
 Processing rules:
 
-- Open with Excel COM
+- `.xlsx` and `.xlsm` are read through the built-in C# Open XML helper
+- The helper reads workbook, shared strings, and worksheet XML entries directly
+- `.xls` and `.xlsb` are opened with Excel COM
+- If Open XML extraction fails, retry through Excel COM as a fallback and record the fallback reason
 - Extract each worksheet separately
 - Write sheet names
 - Output cell values in a tab-separated or CSV-like text form
@@ -163,7 +168,10 @@ Supported:
 
 Processing rules:
 
-- Open with PowerPoint COM
+- `.pptx` and `.pptm` are read through the built-in C# Open XML helper
+- The helper reads slide and notes XML entries directly
+- `.ppt` is opened with PowerPoint COM
+- If Open XML extraction fails, retry through PowerPoint COM as a fallback and record the fallback reason
 - Extract text from slides
 - Write slide numbers clearly
 
@@ -389,10 +397,16 @@ Displayed phases:
 Status examples:
 
 - `OK_TEXT`
-- `OK_WORD`
-- `OK_EXCEL`
-- `OK_POWERPOINT`
-- `OK_WORD_PDF`
+- `OK_DOCX_XML`
+- `OK_XLSX_XML`
+- `OK_PPTX_XML`
+- `OK_WORD_COM`
+- `OK_EXCEL_COM`
+- `OK_POWERPOINT_COM`
+- `OK_WORD_COM_FALLBACK`
+- `OK_EXCEL_COM_FALLBACK`
+- `OK_POWERPOINT_COM_FALLBACK`
+- `OK_PDF_WORD`
 - `FAIL`
 - `UNSUPPORTED`
 - `DEFERRED_TIMEOUT`
@@ -407,7 +421,7 @@ Phase: EXTRACT
 Output: C:\repos\sakana-oss\tools\prompt-pack\output\promptpack_20260702_143000.txt
 
 [18/48] PDF    Working / Stage: OPEN_PDF Elapsed: 12s / 120s  report.pdf
-[18/48] PDF    OK_WORD_PDF      C:\path\report.pdf
+[18/48] PDF    OK_PDF_WORD      C:\path\report.pdf
 
 Summary:
 OK:          42
@@ -423,7 +437,7 @@ PowerShell should use `Write-Host` with colors and same-line console updates. Do
 
 ## 12. Timeout and Deferred Retry
 
-Fast-path text extraction runs in the parent process. Office-backed extraction and all PDF Word import/OCR work run in separate worker PowerShell processes.
+Fast-path text extraction and modern Office Open XML extraction run in the parent process. COM-backed extraction and all PDF Word import/OCR work run in separate worker PowerShell processes.
 
 Default settings:
 
@@ -535,6 +549,9 @@ The tool only bundles source content into one structured text file.
 Expected PowerShell functions:
 
 - `Read-TextFile`
+- `Read-WordOpenXmlFile`
+- `Read-ExcelOpenXmlFile`
+- `Read-PowerPointOpenXmlFile`
 - `Read-WordFile`
 - `Read-ExcelFile`
 - `Read-PowerPointFile`
@@ -550,13 +567,14 @@ Expected high-level process:
 2. Validate inputs with `Get-Item -LiteralPath`
 3. Recursively collect supported files from folders
 4. Build file tree data
-5. Dispatch each file to a worker process with a timeout
-6. Store extraction result objects
-7. Mark timed-out files as `DEFERRED_TIMEOUT`
-8. Build structured output text
-9. Write the `.txt` file
-10. Ask whether to retry deferred files when needed
-11. Show final summary in the console
+5. Dispatch fast text and Open XML files in the parent process
+6. Dispatch COM-backed files to a worker process with a timeout
+7. Store extraction result objects
+8. Mark timed-out files as `DEFERRED_TIMEOUT`
+9. Build structured output text
+10. Write the `.txt` file
+11. Ask whether to retry deferred files when needed
+12. Show final summary in the console
 
 ---
 
@@ -568,6 +586,8 @@ v1 is complete when:
 - Drag-and-drop of folders onto `.bat` works
 - OneDrive / SharePoint synchronized paths work
 - Word, Excel, PowerPoint, PDF, and text files are processed
+- Modern Office Open XML files use the C# ZIP/XML reader
+- Legacy Office files use Office COM
 - PDF text is extracted through Word PDF import / OCR
 - A single `.txt` file is generated
 - A hung file is deferred instead of blocking the whole run

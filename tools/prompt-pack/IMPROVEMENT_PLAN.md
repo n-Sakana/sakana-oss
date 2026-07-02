@@ -42,6 +42,16 @@ Expected useful areas:
 - Fast text file reads.
 - Encoding detection helpers.
 - Lightweight string processing.
+- Modern Office Open XML reads for `.docx`, `.docm`, `.xlsx`, `.xlsm`, `.pptx`, and `.pptm`.
+
+Open XML rules:
+
+- Use Windows standard .NET APIs only.
+- Use `System.IO.Compression` and `System.Xml`.
+- Do not use NuGet packages or the Open XML SDK.
+- Do not extract package folders to disk.
+- Read the existing Office file as a ZIP/XML package in memory.
+- Fall back to Office COM only if Open XML extraction fails.
 
 Areas where C# will not solve the bottleneck:
 
@@ -115,9 +125,10 @@ Rules:
 
 Worker processes remain required for operations that can hang:
 
-- Word files.
-- Excel files.
-- PowerPoint files.
+- Legacy Word files.
+- Legacy Excel files.
+- Legacy PowerPoint files.
+- Open XML fallback cases.
 - PDF files through Word PDF import / OCR.
 
 Timeout behavior remains:
@@ -358,10 +369,14 @@ Before push, verify:
 - Script files remain ASCII-only where required.
 - PowerShell syntax is valid.
 - Text files use the fast path.
+- `.docx` and `.docm` use the Open XML path.
+- `.xlsx` and `.xlsm` use the Open XML path.
+- `.pptx` and `.pptm` use the Open XML path.
+- Open XML fallback to COM is recorded when it occurs.
 - PDFs use Word PDF import / OCR directly.
-- Word files still extract.
-- Excel files still extract.
-- PowerPoint files still extract.
+- Legacy Word files still extract.
+- Legacy Excel files still extract.
+- Legacy PowerPoint files still extract.
 - Timeout produces `DEFERRED_TIMEOUT`.
 - Deferred retry prompt appears only when needed.
 - Paths with spaces work.

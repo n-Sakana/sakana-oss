@@ -76,11 +76,29 @@ reg delete "HKCU\Software\Classes\Directory\shell\PromptPack" /f
 - PowerPoint: `.pptx`, `.ppt`, `.pptm`
 - PDF: `.pdf`
 
-## Word and PDF behavior
+## Office and PDF behavior
 
-Word documents and PDF files are extracted through Microsoft Word COM so that `.docx`, `.doc`, `.docm`, `.rtf`, and `.pdf` use one consistent Word reading path.
+Modern Office files are read directly from their Open XML package with the built-in C# helper loaded through PowerShell `Add-Type`.
 
-The call is kept close to the proven pattern:
+Fast Open XML paths:
+
+- `.docx`, `.docm` - read `word/*.xml` parts from the package
+- `.xlsx`, `.xlsm` - read workbook, shared strings, and worksheet XML parts
+- `.pptx`, `.pptm` - read slide and notes XML parts
+
+These files are ZIP/XML packages already. PromptPack does not create a new ZIP file and does not extract folders to disk; it opens the package in memory and reads the XML entries.
+
+Legacy Office and PDF paths still use Office COM:
+
+- `.doc`, `.rtf` - Word COM
+- `.xls`, `.xlsb` - Excel COM
+- `.ppt` - PowerPoint COM
+- `.pdf` - Word PDF import / OCR
+
+If an Open XML read fails, PromptPack records the fallback reason and retries that file through the relevant Office COM worker.
+
+PDF files are always extracted through Microsoft Word COM. The call is kept close to the proven pattern:
+
 
 ```powershell
 $word = New-Object -ComObject Word.Application
@@ -96,12 +114,14 @@ There is no direct PDF text-layer parser, no PDF-only temporary path rewrite, no
 Fast paths run in the parent process:
 
 - Text-like files
+- Modern Office Open XML files: `.docx`, `.docm`, `.xlsx`, `.xlsm`, `.pptx`, `.pptm`
 
-Office-backed work remains isolated in a per-file worker PowerShell process:
+COM-backed work remains isolated in a per-file worker PowerShell process:
 
-- Word files
-- Excel files
-- PowerPoint files
+- Legacy Word files
+- Legacy Excel files
+- Legacy PowerPoint files
+- Open XML fallback cases
 - PDF files through Word PDF import / OCR
 
 Defaults:
@@ -138,4 +158,4 @@ Worker-backed operations show an ASCII spinner with current stage, elapsed secon
 - The script does not summarize, compress, or truncate source content.
 - Unsupported, failed, and deferred files are recorded in the output.
 - Script-generated labels and console messages are English-only.
-- Microsoft Office is required for Office files and for PDF OCR/import.
+- Microsoft Office is required for legacy Office formats, Open XML fallback, and PDF OCR/import.
