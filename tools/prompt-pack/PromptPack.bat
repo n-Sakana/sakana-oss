@@ -1,7 +1,23 @@
 @echo off
 setlocal EnableExtensions
 
+if /I "%~1"=="--inner" (
+    shift /1
+) else (
+    if /I not "%PROMPTPACK_NO_RELAUNCH%"=="1" (
+        start "PromptPack" "%ComSpec%" /d /k call "%~f0" --inner %*
+        exit /b 0
+    )
+)
+
 chcp 65001 >nul
+cd /d "%~dp0" || (
+    echo ERROR: Failed to enter the PromptPack directory.
+    echo Path: %~dp0
+    echo.
+    pause
+    exit /b 1
+)
 
 set "SCRIPT=%~dp0PromptPack.ps1"
 
@@ -17,6 +33,7 @@ if "%~1"=="" (
     echo PromptPack
     echo ----------
     echo Drag and drop files or folders onto this BAT file.
+    echo You can also run it from the installed context menu.
     echo.
     pause
     exit /b 1
@@ -31,6 +48,9 @@ if "%EXIT_CODE%"=="0" (
 ) else (
     echo PromptPack completed with errors.
 )
-
+echo.
+echo This window is kept open so the result is visible.
+echo You can close it after reading the message above.
+echo.
 pause
 exit /b %EXIT_CODE%
