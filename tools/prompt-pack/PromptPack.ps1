@@ -43,6 +43,496 @@ $script:ExitCode = 0
 $script:WorkerStagePath = ""
 $script:WorkerPidPath = ""
 $script:OwnedOfficePids = New-Object "System.Collections.Generic.HashSet[int]"
+$script:NativeHelperLoaded = $false
+
+function Initialize-NativeHelper {
+    if ($script:NativeHelperLoaded) {
+        return
+    }
+
+    if ("PromptPackNativeHelper" -as [type]) {
+        $script:NativeHelperLoaded = $true
+        return
+    }
+
+    $source = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
+
+public sealed class PromptPackTextResult
+{
+    public string Content;
+    public string EncodingName;
+}
+
+public static class PromptPackNativeHelper
+{
+    public static PromptPackTextResult ReadTextFile(string path)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        PromptPackTextResult result = new PromptPackTextResult();
+
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            result.Content = Encoding.UTF8.GetString(bytes);
+            result.EncodingName = "UTF-8 BOM";
+            return result;
+        }
+
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            result.Content = Encoding.Unicode.GetString(bytes);
+            result.EncodingName = "UTF-16 LE";
+            return result;
+        }
+
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            result.Content = Encoding.BigEndianUnicode.GetString(bytes);
+            result.EncodingName = "UTF-16 BE";
+            return result;
+        }
+
+        try
+        {
+            UTF8Encoding utf8 = new UTF8Encoding(false, true);
+            result.Content = utf8.GetString(bytes);
+            result.EncodingName = "UTF-8";
+            return result;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            result.Content = Encoding.GetEncoding(932).GetString(bytes);
+            result.EncodingName = "CP932";
+            return result;
+        }
+        catch
+        {
+            result.Content = Encoding.Default.GetString(bytes);
+            result.EncodingName = "Default";
+            return result;
+        }
+    }
+
+    public static string ExtractPdfText(string path)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        Encoding latin = Encoding.GetEncoding(28591);
+        string raw = latin.GetString(bytes);
+        StringBuilder output = new StringBuilder();
+        int searchFrom = 0;
+
+        while (true)
+        {
+            int streamMarker = raw.IndexOf("stream", searchFrom, StringComparison.Ordinal);
+            if (streamMarker < 0)
+            {
+                break;
+            }
+
+            int dataStart = streamMarker + 6;
+            if (dataStart < bytes.Length && raw[dataStart] == '\r')
+            {
+                dataStart++;
+                if (dataStart < bytes.Length && raw[dataStart] == '\n')
+                {
+                    dataStart++;
+                }
+            }
+            else if (dataStart < bytes.Length && raw[dataStart] == '\n')
+            {
+                dataStart++;
+            }
+
+            int dataEnd = raw.IndexOf("endstream", dataStart, StringComparison.Ordinal);
+            if (dataEnd < 0)
+            {
+                break;
+            }
+
+            int dictStart = Math.Max(0, streamMarker - 1200);
+            string dictionary = raw.Substring(dictStart, streamMarker - dictStart);
+            byte[] streamBytes = Slice(bytes, dataStart, dataEnd - dataStart);
+            streamBytes = TrimTrailingLineEndings(streamBytes);
+
+            byte[] decoded = streamBytes;
+            if (dictionary.IndexOf("/FlateDecode", StringComparison.Ordinal) >= 0 ||
+                dictionary.IndexOf("/Fl", StringComparison.Ordinal) >= 0)
+            {
+                decoded = TryInflate(streamBytes);
+            }
+
+            if (decoded != null && decoded.Length > 0)
+            {
+                string content = latin.GetString(decoded);
+                string text = ExtractTextFromContentStream(content);
+                if (!String.IsNullOrWhiteSpace(text))
+                {
+                    output.AppendLine(text.Trim());
+                    output.AppendLine();
+                }
+            }
+
+            searchFrom = dataEnd + 9;
+        }
+
+        return CleanExtractedText(output.ToString());
+    }
+
+    private static byte[] Slice(byte[] bytes, int start, int length)
+    {
+        if (length <= 0)
+        {
+            return new byte[0];
+        }
+
+        byte[] result = new byte[length];
+        Buffer.BlockCopy(bytes, start, result, 0, length);
+        return result;
+    }
+
+    private static byte[] TrimTrailingLineEndings(byte[] bytes)
+    {
+        int length = bytes.Length;
+        while (length > 0 && (bytes[length - 1] == 0x0A || bytes[length - 1] == 0x0D))
+        {
+            length--;
+        }
+
+        if (length == bytes.Length)
+        {
+            return bytes;
+        }
+
+        return Slice(bytes, 0, length);
+    }
+
+    private static byte[] TryInflate(byte[] data)
+    {
+        byte[] result = TryInflateWithOffset(data, 0);
+        if (result != null)
+        {
+            return result;
+        }
+
+        if (data.Length > 2)
+        {
+            result = TryInflateWithOffset(data, 2);
+            if (result != null)
+            {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    private static byte[] TryInflateWithOffset(byte[] data, int offset)
+    {
+        try
+        {
+            using (MemoryStream input = new MemoryStream(data, offset, data.Length - offset))
+            using (DeflateStream deflate = new DeflateStream(input, CompressionMode.Decompress))
+            using (MemoryStream output = new MemoryStream())
+            {
+                CopyStream(deflate, output);
+                return output.ToArray();
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void CopyStream(Stream input, Stream output)
+    {
+        byte[] buffer = new byte[8192];
+        while (true)
+        {
+            int read = input.Read(buffer, 0, buffer.Length);
+            if (read <= 0)
+            {
+                break;
+            }
+            output.Write(buffer, 0, read);
+        }
+    }
+
+    private static string ExtractTextFromContentStream(string content)
+    {
+        StringBuilder output = new StringBuilder();
+        bool inTextObject = false;
+        int index = 0;
+
+        while (index < content.Length)
+        {
+            if (IsTokenAt(content, index, "BT"))
+            {
+                inTextObject = true;
+                index += 2;
+                continue;
+            }
+
+            if (IsTokenAt(content, index, "ET"))
+            {
+                inTextObject = false;
+                output.AppendLine();
+                index += 2;
+                continue;
+            }
+
+            if (inTextObject && content[index] == '(')
+            {
+                int endIndex;
+                string value = ReadPdfLiteralString(content, index, out endIndex);
+                if (!String.IsNullOrEmpty(value))
+                {
+                    output.Append(value);
+                }
+                index = Math.Max(index + 1, endIndex);
+                continue;
+            }
+
+            if (inTextObject && content[index] == '<' && index + 1 < content.Length && content[index + 1] != '<')
+            {
+                int endIndex;
+                string value = ReadPdfHexString(content, index, out endIndex);
+                if (!String.IsNullOrEmpty(value))
+                {
+                    output.Append(value);
+                }
+                index = Math.Max(index + 1, endIndex);
+                continue;
+            }
+
+            if (inTextObject && IsTokenAt(content, index, "T*"))
+            {
+                output.AppendLine();
+                index += 2;
+                continue;
+            }
+
+            if (inTextObject && IsTokenAt(content, index, "Td"))
+            {
+                output.AppendLine();
+                index += 2;
+                continue;
+            }
+
+            if (inTextObject && IsTokenAt(content, index, "TD"))
+            {
+                output.AppendLine();
+                index += 2;
+                continue;
+            }
+
+            index++;
+        }
+
+        return output.ToString();
+    }
+
+    private static bool IsTokenAt(string text, int index, string token)
+    {
+        if (index < 0 || index + token.Length > text.Length)
+        {
+            return false;
+        }
+
+        if (String.CompareOrdinal(text, index, token, 0, token.Length) != 0)
+        {
+            return false;
+        }
+
+        bool leftOk = index == 0 || IsDelimiter(text[index - 1]);
+        bool rightOk = index + token.Length >= text.Length || IsDelimiter(text[index + token.Length]);
+        return leftOk && rightOk;
+    }
+
+    private static bool IsDelimiter(char value)
+    {
+        return Char.IsWhiteSpace(value) || value == '[' || value == ']' || value == '<' || value == '>' || value == '/' || value == '(' || value == ')';
+    }
+
+    private static string ReadPdfLiteralString(string text, int start, out int endIndex)
+    {
+        List<byte> bytes = new List<byte>();
+        int depth = 1;
+        int index = start + 1;
+
+        while (index < text.Length)
+        {
+            char current = text[index];
+            if (current == '\\')
+            {
+                index++;
+                if (index >= text.Length)
+                {
+                    break;
+                }
+
+                char escaped = text[index];
+                if (escaped == 'n') bytes.Add(0x0A);
+                else if (escaped == 'r') bytes.Add(0x0D);
+                else if (escaped == 't') bytes.Add(0x09);
+                else if (escaped == 'b') bytes.Add(0x08);
+                else if (escaped == 'f') bytes.Add(0x0C);
+                else if (escaped == '(') bytes.Add((byte)'(');
+                else if (escaped == ')') bytes.Add((byte)')');
+                else if (escaped == '\\') bytes.Add((byte)'\\');
+                else if (escaped == '\r')
+                {
+                    if (index + 1 < text.Length && text[index + 1] == '\n')
+                    {
+                        index++;
+                    }
+                }
+                else if (escaped == '\n')
+                {
+                }
+                else if (escaped >= '0' && escaped <= '7')
+                {
+                    int value = escaped - '0';
+                    int count = 1;
+                    while (count < 3 && index + 1 < text.Length && text[index + 1] >= '0' && text[index + 1] <= '7')
+                    {
+                        index++;
+                        value = (value * 8) + (text[index] - '0');
+                        count++;
+                    }
+                    bytes.Add((byte)(value & 0xFF));
+                }
+                else
+                {
+                    bytes.Add((byte)(escaped & 0xFF));
+                }
+            }
+            else if (current == '(')
+            {
+                depth++;
+                bytes.Add((byte)'(');
+            }
+            else if (current == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    index++;
+                    break;
+                }
+                bytes.Add((byte)')');
+            }
+            else
+            {
+                bytes.Add((byte)(current & 0xFF));
+            }
+
+            index++;
+        }
+
+        endIndex = index;
+        return DecodePdfBytes(bytes.ToArray());
+    }
+
+    private static string ReadPdfHexString(string text, int start, out int endIndex)
+    {
+        StringBuilder hex = new StringBuilder();
+        int index = start + 1;
+
+        while (index < text.Length)
+        {
+            char current = text[index];
+            if (current == '>')
+            {
+                index++;
+                break;
+            }
+
+            if (IsHex(current))
+            {
+                hex.Append(current);
+            }
+
+            index++;
+        }
+
+        if ((hex.Length % 2) == 1)
+        {
+            hex.Append('0');
+        }
+
+        byte[] bytes = new byte[hex.Length / 2];
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            bytes[i] = Convert.ToByte(hex.ToString(i * 2, 2), 16);
+        }
+
+        endIndex = index;
+        return DecodePdfBytes(bytes);
+    }
+
+    private static bool IsHex(char value)
+    {
+        return (value >= '0' && value <= '9') ||
+            (value >= 'a' && value <= 'f') ||
+            (value >= 'A' && value <= 'F');
+    }
+
+    private static string DecodePdfBytes(byte[] bytes)
+    {
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
+        }
+
+        return Encoding.GetEncoding(28591).GetString(bytes);
+    }
+
+    private static string CleanExtractedText(string text)
+    {
+        if (String.IsNullOrWhiteSpace(text))
+        {
+            return "";
+        }
+
+        string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        StringBuilder output = new StringBuilder();
+        bool previousBlank = false;
+
+        foreach (string rawLine in lines)
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                if (!previousBlank)
+                {
+                    output.AppendLine();
+                }
+                previousBlank = true;
+            }
+            else
+            {
+                output.AppendLine(line);
+                previousBlank = false;
+            }
+        }
+
+        return output.ToString().Trim();
+    }
+}
+'@
+
+    Add-Type -TypeDefinition $source -Language CSharp
+    $script:NativeHelperLoaded = $true
+}
 
 function Write-Section {
     param([string]$Text)
@@ -302,48 +792,33 @@ function New-ExtractionResult {
     }
 }
 
+function Get-SuccessStatus {
+    param(
+        [string]$Kind,
+        [string]$Method
+    )
+
+    if ($Kind -eq "Text") { return "OK_TEXT" }
+    if ($Kind -eq "Word") { return "OK_WORD" }
+    if ($Kind -eq "Excel") { return "OK_EXCEL" }
+    if ($Kind -eq "PowerPoint") { return "OK_POWERPOINT" }
+    if ($Kind -eq "PDF" -and $Method -eq "PDF Text Layer") { return "OK_PDF_TEXT" }
+    if ($Kind -eq "PDF") { return "OK_WORD_OCR" }
+
+    return "OK"
+}
+
 function Read-TextFile {
     param([string]$Path)
 
     Set-WorkerStage -Stage "READ_TEXT"
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    $encodingName = "UTF-8"
-    $text = $null
-
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        $encodingName = "UTF-8 BOM"
-        $text = [System.Text.Encoding]::UTF8.GetString($bytes)
-    }
-    elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
-        $encodingName = "UTF-16 LE"
-        $text = [System.Text.Encoding]::Unicode.GetString($bytes)
-    }
-    elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
-        $encodingName = "UTF-16 BE"
-        $text = [System.Text.Encoding]::BigEndianUnicode.GetString($bytes)
-    }
-    else {
-        $utf8Strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
-        try {
-            $encodingName = "UTF-8"
-            $text = $utf8Strict.GetString($bytes)
-        }
-        catch {
-            try {
-                $encodingName = "CP932"
-                $text = [System.Text.Encoding]::GetEncoding(932).GetString($bytes)
-            }
-            catch {
-                $encodingName = "Default"
-                $text = [System.Text.Encoding]::Default.GetString($bytes)
-            }
-        }
-    }
+    Initialize-NativeHelper
+    $data = [PromptPackNativeHelper]::ReadTextFile($Path)
 
     return [pscustomobject]@{
-        Content = $text
+        Content = $data.Content
         Method = "Text Read"
-        Notes = $encodingName
+        Notes = $data.EncodingName
     }
 }
 
@@ -403,6 +878,59 @@ function Read-PdfFileWithWord {
         $data.Notes = $data.Notes + "; Opened directly with Word"
     }
     return $data
+}
+
+function Test-UsableExtractedText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+
+    $visibleCount = 0
+    foreach ($char in $Text.ToCharArray()) {
+        if (-not [char]::IsControl($char) -and -not [char]::IsWhiteSpace($char)) {
+            $visibleCount++
+        }
+    }
+
+    return ($visibleCount -ge 4)
+}
+
+function Read-PdfFileDirect {
+    param([string]$Path)
+
+    Set-WorkerStage -Stage "READ_PDF_TEXT_LAYER"
+    Initialize-NativeHelper
+    $text = [PromptPackNativeHelper]::ExtractPdfText($Path)
+
+    if (-not (Test-UsableExtractedText -Text $text)) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Content = $text
+        Method = "PDF Text Layer"
+        Notes = "Direct extraction"
+    }
+}
+
+function Read-PdfFile {
+    param([string]$Path)
+
+    $direct = Read-PdfFileDirect -Path $Path
+    if ($null -ne $direct) {
+        return $direct
+    }
+
+    $fallback = Read-PdfFileWithWord -Path $Path
+    if ([string]::IsNullOrWhiteSpace($fallback.Notes)) {
+        $fallback.Notes = "Fallback after direct extraction found no usable text"
+    }
+    else {
+        $fallback.Notes = $fallback.Notes + "; Fallback after direct extraction found no usable text"
+    }
+    return $fallback
 }
 
 function Format-CellText {
@@ -599,13 +1127,14 @@ function Invoke-FileExtraction {
             $data = Read-PowerPointFile -Path $File.FullName
         }
         elseif ($kind -eq "PDF") {
-            $data = Read-PdfFileWithWord -Path $File.FullName
+            $data = Read-PdfFile -Path $File.FullName
         }
         else {
             return New-ExtractionResult -No $No -Status "UNSUPPORTED" -Type $kind -Path $File.FullName -Method "Not processed" -Notes "Extension is not supported in v1" -Content ""
         }
 
-        return New-ExtractionResult -No $No -Status "OK" -Type $kind -Path $File.FullName -Method $data.Method -Notes $data.Notes -Content $data.Content
+        $status = Get-SuccessStatus -Kind $kind -Method $data.Method
+        return New-ExtractionResult -No $No -Status $status -Type $kind -Path $File.FullName -Method $data.Method -Notes $data.Notes -Content $data.Content
     }
     catch {
         return New-ExtractionResult -No $No -Status "FAIL" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes $_.Exception.Message -Content ""
@@ -800,7 +1329,7 @@ function Write-StatusLine {
     )
 
     $statusColor = "Gray"
-    if ($Result.Status -eq "OK") { $statusColor = "Green" }
+    if ($Result.Status -like "OK*") { $statusColor = "Green" }
     elseif ($Result.Status -eq "FAIL") { $statusColor = "Red" }
     elseif ($Result.Status -eq "UNSUPPORTED") { $statusColor = "DarkYellow" }
     elseif ($Result.Status -eq "DEFERRED_TIMEOUT") { $statusColor = "Yellow" }
@@ -897,11 +1426,65 @@ function New-DeferredTimeoutResult {
     return New-ExtractionResult -No $No -Status "DEFERRED_TIMEOUT" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes ("Timeout after {0} seconds. Last stage: {1}" -f $TimeoutSeconds, $Stage) -Content ""
 }
 
+function Clear-CurrentConsoleLine {
+    try {
+        $width = [Console]::WindowWidth
+        if ($width -lt 20) {
+            $width = 120
+        }
+    }
+    catch {
+        $width = 120
+    }
+
+    Write-Host ("`r" + (" " * ([Math]::Min($width - 1, 180))) + "`r") -NoNewline
+}
+
+function Write-WorkerSpinner {
+    param(
+        [int]$Index,
+        [int]$Total,
+        [System.IO.FileInfo]$File,
+        [string]$Stage,
+        [int]$ElapsedSeconds,
+        [int]$TimeoutSeconds,
+        [string]$Spinner
+    )
+
+    $name = $File.Name
+    if ($name.Length -gt 48) {
+        $name = $name.Substring(0, 45) + "..."
+    }
+
+    $line = "[{0}/{1}] {2,-6} Working {3} Stage: {4} Elapsed: {5}s / {6}s  {7}" -f `
+        $Index,
+        $Total,
+        (Get-TypeCode -Path $File.FullName),
+        $Spinner,
+        $Stage,
+        $ElapsedSeconds,
+        $TimeoutSeconds,
+        $name
+
+    try {
+        $width = [Console]::WindowWidth
+        if ($width -gt 20 -and $line.Length -gt ($width - 1)) {
+            $line = $line.Substring(0, $width - 2)
+        }
+    }
+    catch {
+    }
+
+    Write-Host ("`r" + $line) -NoNewline -ForegroundColor DarkCyan
+}
+
 function Invoke-FileExtractionWithTimeout {
     param(
         [System.IO.FileInfo]$File,
         [int]$No,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [int]$Index = 0,
+        [int]$Total = 0
     )
 
     $jobRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "PromptPack"
@@ -953,8 +1536,21 @@ function Invoke-FileExtractionWithTimeout {
         [void]$process.Start()
 
         $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+        $startTime = Get-Date
+        $spinnerChars = @("|", "/", "-", "\")
+        $spinnerIndex = 0
         while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
+            if ($Index -gt 0 -and $Total -gt 0) {
+                $stage = Get-LatestWorkerStage -StagePath $stagePath
+                $elapsedSeconds = [int]((Get-Date) - $startTime).TotalSeconds
+                Write-WorkerSpinner -Index $Index -Total $Total -File $File -Stage $stage -ElapsedSeconds $elapsedSeconds -TimeoutSeconds $TimeoutSeconds -Spinner $spinnerChars[$spinnerIndex % $spinnerChars.Count]
+                $spinnerIndex++
+            }
             Start-Sleep -Milliseconds 250
+        }
+
+        if ($Index -gt 0 -and $Total -gt 0) {
+            Clear-CurrentConsoleLine
         }
 
         $completed = $process.HasExited
@@ -1000,7 +1596,7 @@ function Get-ResultCounts {
     param([object[]]$Results)
 
     return [pscustomobject]@{
-        OK = @($Results | Where-Object { $_.Status -eq "OK" }).Count
+        OK = @($Results | Where-Object { $_.Status -like "OK*" }).Count
         Failed = @($Results | Where-Object { $_.Status -eq "FAIL" }).Count
         Unsupported = @($Results | Where-Object { $_.Status -eq "UNSUPPORTED" }).Count
         Deferred = @($Results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" }).Count
@@ -1099,7 +1695,7 @@ function Build-OutputText {
         }
         [void]$builder.AppendLine("")
 
-        if ($result.Status -eq "OK") {
+        if ($result.Status -like "OK*") {
             [void]$builder.AppendLine($result.Content)
         }
         elseif ($result.Status -eq "DEFERRED_TIMEOUT") {
@@ -1219,6 +1815,47 @@ function Write-Summary {
     }
 }
 
+function Invoke-OptimizedFileExtraction {
+    param(
+        [System.IO.FileInfo]$File,
+        [int]$No,
+        [int]$TimeoutSeconds,
+        [int]$Index,
+        [int]$Total
+    )
+
+    $kind = Get-FileKind -Path $File.FullName
+
+    if ($kind -eq "Unsupported") {
+        return New-ExtractionResult -No $No -Status "UNSUPPORTED" -Type $kind -Path $File.FullName -Method "Not processed" -Notes "Extension is not supported in v1" -Content ""
+    }
+
+    if ($kind -eq "Text") {
+        return Invoke-FileExtraction -File $File -No $No
+    }
+
+    if ($kind -eq "PDF") {
+        try {
+            $direct = Read-PdfFileDirect -Path $File.FullName
+            if ($null -ne $direct) {
+                return New-ExtractionResult -No $No -Status "OK_PDF_TEXT" -Type $kind -Path $File.FullName -Method $direct.Method -Notes $direct.Notes -Content $direct.Content
+            }
+        }
+        catch {
+            Write-Warn -Text ("Direct PDF extraction failed, falling back to Word: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    return Invoke-FileExtractionWithTimeout -File $File -No $No -TimeoutSeconds $TimeoutSeconds -Index $Index -Total $Total
+}
+
+function Write-Phase {
+    param([string]$Name)
+
+    Write-Host ""
+    Write-Host ("Phase: {0}" -f $Name) -ForegroundColor Cyan
+}
+
 function Invoke-MainExtractionPass {
     param(
         [System.IO.FileInfo[]]$Files,
@@ -1231,9 +1868,9 @@ function Invoke-MainExtractionPass {
     foreach ($file in $Files) {
         $index++
         $percent = [int](($index / [double]$Files.Count) * 100)
-        Write-Progress -Activity "PromptPack" -Status ("Processing {0} of {1}" -f $index, $Files.Count) -PercentComplete $percent
+        Write-Progress -Activity "PromptPack" -Status ("Extracting {0} of {1}" -f $index, $Files.Count) -PercentComplete $percent
 
-        $result = Invoke-FileExtractionWithTimeout -File $file -No $index -TimeoutSeconds $TimeoutSeconds
+        $result = Invoke-OptimizedFileExtraction -File $file -No $index -TimeoutSeconds $TimeoutSeconds -Index $index -Total $Files.Count
         $results.Add($result) | Out-Null
         Write-StatusLine -Index $index -Total $Files.Count -Result $result
     }
@@ -1262,7 +1899,7 @@ function Invoke-DeferredRetryPass {
 
         try {
             $file = Get-Item -LiteralPath $oldResult.Path -Force -ErrorAction Stop
-            $newResult = Invoke-FileExtractionWithTimeout -File $file -No ([int]$oldResult.No) -TimeoutSeconds $TimeoutSeconds
+            $newResult = Invoke-FileExtractionWithTimeout -File $file -No ([int]$oldResult.No) -TimeoutSeconds $TimeoutSeconds -Index $retryIndex -Total $deferred.Count
         }
         catch {
             $newResult = New-ExtractionResult -No ([int]$oldResult.No) -Status "FAIL" -Type $oldResult.Type -Path $oldResult.Path -Method $oldResult.Method -Notes $_.Exception.Message -Content ""
@@ -1316,23 +1953,12 @@ function Invoke-PromptPack {
     Write-Section -Text "PromptPack"
     Write-Info -Text ("Main timeout seconds: {0}" -f $TimeoutSeconds)
     Write-Info -Text ("Retry timeout seconds: {0}" -f $RetryTimeoutSeconds)
-    Write-Info -Text "Collecting files..."
-
-    $baseDirectory = Get-OutputBaseDirectory -FirstPath $InputPaths[0]
-    $fileTree = Build-FileTree -Paths $InputPaths
-    $files = @(Collect-InputFiles -Paths $InputPaths)
-
-    if ($files.Count -eq 0) {
-        throw "No files were found."
-    }
-
-    Write-Info -Text ("Files found: {0}" -f $files.Count)
-
-    $results = Invoke-MainExtractionPass -Files $files -TimeoutSeconds $TimeoutSeconds
 
     if ([string]::IsNullOrWhiteSpace($OutFile)) {
+        $scriptDirectory = Split-Path -Parent $PSCommandPath
+        $outputDirectory = Join-Path -Path $scriptDirectory -ChildPath "output"
         $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $OutFile = Join-Path -Path $baseDirectory -ChildPath ("prompt-pack_{0}.txt" -f $stamp)
+        $OutFile = Join-Path -Path $outputDirectory -ChildPath ("promptpack_{0}.txt" -f $stamp)
     }
 
     $outputFullPath = [System.IO.Path]::GetFullPath($OutFile)
@@ -1341,12 +1967,32 @@ function Invoke-PromptPack {
         [void](New-Item -ItemType Directory -Path $outputDirectory -Force)
     }
 
+    Write-Info -Text ("Output path: {0}" -f $outputFullPath)
+    Write-Phase -Name "SCAN"
+    Write-Info -Text "Collecting files..."
+
+    $fileTree = Build-FileTree -Paths $InputPaths
+    $files = @(Collect-InputFiles -Paths $InputPaths)
+
+    if ($files.Count -eq 0) {
+        throw "No files were found."
+    }
+
+    Write-Phase -Name "PLAN"
+    Write-Info -Text ("Files found: {0}" -f $files.Count)
+
+    Write-Phase -Name "EXTRACT"
+    $results = Invoke-MainExtractionPass -Files $files -TimeoutSeconds $TimeoutSeconds
+
+    Write-Phase -Name "WRITE"
     Write-BundleOutput -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -OutputPath $outputFullPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
     Write-Summary -Title "Main Pass Completed" -OutputPath $outputFullPath -Results $results.ToArray()
 
     $retryChoice = Get-DeferredRetryChoice -Results $results.ToArray()
     if ($retryChoice -eq "Retry") {
+        Write-Phase -Name "DEFERRED"
         Invoke-DeferredRetryPass -Results $results -TimeoutSeconds $RetryTimeoutSeconds
+        Write-Phase -Name "WRITE"
         Write-BundleOutput -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -OutputPath $outputFullPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
         Write-Summary -Title "Retry Completed" -OutputPath $outputFullPath -Results $results.ToArray()
     }
@@ -1354,6 +2000,7 @@ function Invoke-PromptPack {
         Write-Info -Text "Deferred retry skipped."
     }
 
+    Write-Phase -Name "DONE"
     $counts = Get-ResultCounts -Results $results.ToArray()
     if ($counts.Failed -gt 0 -or $counts.Deferred -gt 0 -or $script:ScanMessages.Count -gt 0) {
         $script:ExitCode = 1

@@ -4,9 +4,15 @@ PromptPack bundles files and folders into one structured text file for generativ
 
 ## Files
 
-- `PromptPack.bat` — drag-and-drop entry point for Windows
-- `PromptPack.ps1` — extraction and bundling script
-- `SPEC.md` — v1 specification
+- `PromptPack.bat` - drag-and-drop entry point for Windows
+- `PromptPack.ps1` - extraction and bundling script
+- `Install-PromptPackContextMenu.bat` - starts the optional current-user Explorer context menu installer
+- `Install-PromptPackContextMenu.ps1` - writes the HKCU context menu registry keys
+- `Uninstall-PromptPackContextMenu.bat` - starts the context menu uninstaller
+- `Uninstall-PromptPackContextMenu.ps1` - removes the HKCU context menu registry keys
+- `SPEC.md` - v1 specification
+- `IMPROVEMENT_PLAN.md` - performance and UX improvement record
+- `output/` - generated bundles; contents are ignored by git
 
 ## Usage
 
@@ -18,12 +24,42 @@ The BAT file starts PowerShell without administrator privileges:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "PromptPack.ps1"
 ```
 
-The output file is created next to the first dropped file, or inside the first dropped folder.
-
-Example output name:
+Generated bundles are written under the tool directory:
 
 ```text
-prompt-pack_20260702_113000.txt
+tools/prompt-pack/output/promptpack_yyyyMMdd_HHmmss.txt
+```
+
+You can override the output path with `-OutFile` when running `PromptPack.ps1` directly.
+
+## Optional Explorer context menu
+
+Run this once to add `Run PromptPack` to the current user's file and folder right-click menus:
+
+```bat
+Install-PromptPackContextMenu.bat
+```
+
+Run this to remove it:
+
+```bat
+Uninstall-PromptPackContextMenu.bat
+```
+
+The installer writes only to HKCU:
+
+```text
+HKCU\Software\Classes\*\shell\PromptPack
+HKCU\Software\Classes\Directory\shell\PromptPack
+```
+
+No SendTo shortcut is created. If the tool directory is moved, run the installer again to update the command path. The uninstaller deletes fixed keys, so it can remove old registrations even from a newly downloaded copy.
+
+Manual removal:
+
+```bat
+reg delete "HKCU\Software\Classes\*\shell\PromptPack" /f
+reg delete "HKCU\Software\Classes\Directory\shell\PromptPack" /f
 ```
 
 ## Supported inputs
@@ -32,20 +68,47 @@ prompt-pack_20260702_113000.txt
 - Word: `.docx`, `.doc`, `.docm`, `.rtf`
 - Excel: `.xlsx`, `.xls`, `.xlsm`, `.xlsb`
 - PowerPoint: `.pptx`, `.ppt`, `.pptm`
-- PDF: `.pdf`, direct Word PDF import / OCR
+- PDF: `.pdf`
 
-## Timeout and deferred retry
+## PDF behavior
 
-Each file is extracted in a separate worker PowerShell process.
+PDF extraction is two-stage:
+
+1. Try direct text-layer extraction with a built-in C# helper loaded through `Add-Type`.
+2. If no usable text is found, fall back to Word PDF import / OCR.
+
+The Word fallback uses the same resolved source path as other files and keeps the call close to the proven pattern:
+
+```powershell
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$doc = $word.Documents.Open($Path)
+$text = $doc.Content.Text
+```
+
+There is no PDF-only temporary path rewrite, no converter format override, and no external PDF/OCR dependency.
+
+## Performance and timeout behavior
+
+Fast paths run in the parent process:
+
+- Text-like files
+- PDF files with directly extractable text layers
+
+Office-backed work remains isolated in a per-file worker PowerShell process:
+
+- Word files
+- Excel files
+- PowerPoint files
+- PDFs that need Word PDF import / OCR
 
 Defaults:
 
-- Main pass timeout: 120 seconds per file
-- Retry timeout: 300 seconds per file
+- Main pass timeout: 120 seconds per worker-backed file
+- Retry timeout: 300 seconds per worker-backed file
 - Deferred retry mode: ask the user after the main output is written
 
 If a file times out, the main pass continues and records the file as `DEFERRED_TIMEOUT`.
-After the main pass finishes, PromptPack writes the output file and then asks whether to retry deferred files.
 
 Command-line example:
 
@@ -55,10 +118,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\PromptPack.ps1 -Timeou
 
 For unattended tests, use `-DeferredAction Skip`.
 
+## Console UX
+
+PromptPack shows phase markers and visible progress:
+
+- `SCAN`
+- `PLAN`
+- `EXTRACT`
+- `WRITE`
+- `DEFERRED`
+- `DONE`
+
+Worker-backed operations show an ASCII spinner with current stage, elapsed seconds, and timeout limit.
+
 ## Notes
 
 - The script does not summarize, compress, or truncate source content.
 - Unsupported, failed, and deferred files are recorded in the output.
-- PDF files are opened directly with Word COM using the same resolved input path as other file types. No PDF-only temporary path rewrite, direct text pre-pass, or converter format override is used.
 - Script-generated labels and console messages are English-only.
-- Microsoft Office is required for Office files and for PDF OCR/import.
+- Microsoft Office is required for Office files and for PDF OCR/import fallback.

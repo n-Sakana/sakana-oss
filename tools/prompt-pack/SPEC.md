@@ -22,8 +22,13 @@ The tool contains these files:
 
 - `PromptPack.bat`
 - `PromptPack.ps1`
+- `Install-PromptPackContextMenu.bat`
+- `Install-PromptPackContextMenu.ps1`
+- `Uninstall-PromptPackContextMenu.bat`
+- `Uninstall-PromptPackContextMenu.ps1`
 - `README.md`
 - `SPEC.md`
+- `output/.gitignore`
 
 Roles:
 
@@ -49,11 +54,12 @@ User operation:
 1. Drag files or folders onto `PromptPack.bat`
 2. PowerShell starts
 3. The script scans input paths
-4. The script extracts contents from supported files in per-file worker processes
-5. A per-file timeout prevents a single hung file from blocking the whole run
-6. The script writes a single `.txt` output file after the main pass
-7. If timeout-deferred files exist, the user can choose whether to retry them
-8. The console shows the output path and extraction summary
+4. The script extracts fast-path files in the parent process
+5. Office-backed files and OCR fallback run in per-file worker processes
+6. A per-file timeout prevents a single hung worker from blocking the whole run
+7. The script writes a single `.txt` output file under `output/` after the main pass
+8. If timeout-deferred files exist, the user can choose whether to retry them
+9. The console shows the output path and extraction summary
 
 Expected `.bat` shape:
 
@@ -170,21 +176,20 @@ Supported:
 Processing rules:
 
 - Resolve and validate the input path using the same path handling used for other file types
-- Open the original PDF path directly with Word COM
+- First try direct text-layer extraction using the built-in C# helper loaded through `Add-Type`
+- Use Windows-standard .NET capabilities only
+- If no usable direct text is found, open the original PDF path directly with Word COM
 - Do not use PDF-only temporary path rewriting
-- Do not use PDF-only direct text extraction before Word
 - Do not pass a special PDF converter format to Word
-- Let Word handle PDF conversion and OCR
+- Let Word handle PDF conversion and OCR for scanned or handwritten PDFs
 - Extract text from the opened Word document
 - Keep the original path in the output
-- Support scanned or handwritten PDFs as far as Word can recognize them
 
 Rules:
 
 - No separate OCR engine in v1
 - No Tesseract integration in v1
 - No Azure OCR integration in v1
-- If Word cannot extract usable text, record the failure or low-quality result explicitly
 
 ---
 
@@ -248,15 +253,16 @@ Output format:
 Example file name:
 
 ```text
-prompt-pack_20260702_111530.txt
+tools/prompt-pack/output/promptpack_20260702_111530.txt
 ```
 
 Output location:
 
-- Use the first input path as the base location
-- If the first input is a file, output next to that file
-- If the first input is a folder, output inside that folder or next to it according to implementation convenience
+- Use `output/` under the PromptPack script directory by default
+- Create the directory automatically when needed
+- Keep `output/.gitignore` so generated bundles do not dirty the repository
 - Use safe path construction with `Join-Path`
+- Allow direct script users to override the location with `-OutFile`
 
 ---
 
@@ -368,37 +374,49 @@ Rules:
 - Modern and readable
 - Color-coded where practical
 - No emoji
-- Avoid decorations that are likely to cause mojibake
+- Use ASCII spinner characters for worker-backed waiting states
 - Show the final output path
 - Show the final extraction summary
+
+Displayed phases:
+
+- `SCAN`
+- `PLAN`
+- `EXTRACT`
+- `WRITE`
+- `DEFERRED`
+- `DONE`
+
+Status examples:
+
+- `OK_TEXT`
+- `OK_WORD`
+- `OK_EXCEL`
+- `OK_POWERPOINT`
+- `OK_PDF_TEXT`
+- `OK_WORD_OCR`
+- `FAIL`
+- `UNSUPPORTED`
+- `DEFERRED_TIMEOUT`
 
 Example:
 
 ```text
 PromptPack
--------------------------
+----------
 
-[SCAN] Collecting files...
-[INFO] 12 files found
+Phase: EXTRACT
+Output: C:\repos\sakana-oss\tools\prompt-pack\output\promptpack_20260702_143000.txt
 
-[01/12] TXT   OK     notes.md
-[02/12] DOCX  OK     proposal.docx
-[03/12] PDF   OK     handwritten-form.pdf
-[04/12] XLSX  OK     data.xlsx
-[05/12] PDF   FAIL   locked.pdf
-
-Progress: 5 / 12
-
--------------------------
-Done.
-
-Output:
-C:\Users\...\prompt-pack_20260702_111530.txt
+[18/48] PDF    Working / Stage: OPEN_PDF Elapsed: 12s / 120s  report.pdf
+[18/48] PDF    OK_WORD_OCR      C:\path\report.pdf
 
 Summary:
-OK:      10
-Failed:  2
-Total:   12
+OK:          42
+Failed:      2
+Deferred:    3
+Unsupported: 1
+Total:       48
 ```
 
 PowerShell may use `Write-Host` with colors and `Write-Progress` if it does not make output harder to read.
@@ -407,11 +425,11 @@ PowerShell may use `Write-Host` with colors and `Write-Progress` if it does not 
 
 ## 12. Timeout and Deferred Retry
 
-All file extraction work runs in a separate worker PowerShell process.
+Fast-path extraction runs in the parent process. Office-backed extraction and PDF Word OCR fallback run in separate worker PowerShell processes.
 
 Default settings:
 
-- Main pass timeout: 120 seconds per file
+- Main pass timeout: 120 seconds per worker-backed file
 - Retry timeout: 300 seconds per file
 - Deferred retry: ask the user after the main pass
 
@@ -465,7 +483,36 @@ Failure records must appear both in the extraction summary and in the failed fil
 
 ---
 
-## 14. Non-Goals for v1
+## 14. Optional Explorer Context Menu
+
+PromptPack includes optional current-user Explorer context menu registration.
+
+Included files:
+
+- `Install-PromptPackContextMenu.bat`
+- `Install-PromptPackContextMenu.ps1`
+- `Uninstall-PromptPackContextMenu.bat`
+- `Uninstall-PromptPackContextMenu.ps1`
+
+Registry locations:
+
+```text
+HKCU\Software\Classes\*\shell\PromptPack
+HKCU\Software\Classes\Directory\shell\PromptPack
+```
+
+Rules:
+
+- HKCU only
+- No administrator privileges
+- No SendTo shortcut
+- Registration is persistent until uninstall
+- The uninstall script deletes fixed keys and does not depend on the original install path
+- Re-running install updates the command path to the current tool directory
+
+---
+
+## 15. Non-Goals for v1
 
 v1 does not do the following:
 
@@ -485,7 +532,7 @@ The tool only bundles source content into one structured text file.
 
 ---
 
-## 15. Implementation Outline
+## 16. Implementation Outline
 
 Expected PowerShell functions:
 
@@ -515,7 +562,7 @@ Expected high-level process:
 
 ---
 
-## 16. Completion Criteria
+## 17. Completion Criteria
 
 v1 is complete when:
 
