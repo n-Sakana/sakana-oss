@@ -40,11 +40,15 @@ Run this once to add `Run PromptPack` to the current user's file and folder righ
 Install-PromptPackContextMenu.bat
 ```
 
+The installer opens a persistent command window when launched from Explorer so that errors and success messages do not disappear immediately. Close the window manually after reading the result.
+
 Run this to remove it:
 
 ```bat
 Uninstall-PromptPackContextMenu.bat
 ```
+
+The uninstaller uses the same persistent-window behavior.
 
 The installer writes only to HKCU:
 
