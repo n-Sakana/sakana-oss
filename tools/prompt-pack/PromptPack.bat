@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 if /I "%~1"=="--inner" (
-    shift /1
+    shift
 ) else (
     if /I not "%PROMPTPACK_NO_RELAUNCH%"=="1" (
         start "PromptPack" "%ComSpec%" /d /k call "%~f0" --inner %*
@@ -43,7 +43,7 @@ set ARGS=
 :PromptPackBuildArgs
 if "%~1"=="" goto PromptPackArgsDone
 set ARGS=%ARGS% "%~1"
-shift /1
+shift
 goto PromptPackBuildArgs
 :PromptPackArgsDone
 
