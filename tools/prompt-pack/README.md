@@ -13,6 +13,7 @@ PromptPack bundles files and folders into one structured text file for generativ
 - `SPEC.md` - v1 specification
 - `IMPROVEMENT_PLAN.md` - performance and UX improvement record
 - `output/` - generated bundles; contents are ignored by git
+- `logs/` - per-run diagnostic logs; contents are ignored by git
 
 ## Usage
 
@@ -26,13 +27,16 @@ The BAT file starts PowerShell without administrator privileges:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "PromptPack.ps1"
 ```
 
-Generated bundles are written under the tool directory:
+Generated bundles and diagnostic logs are written under the tool directory:
 
 ```text
 tools/prompt-pack/output/promptpack_yyyyMMdd_HHmmss.txt
+tools/prompt-pack/logs/promptpack_yyyyMMdd_HHmmss.log
 ```
 
-You can override the output path with `-OutFile` when running `PromptPack.ps1` directly.
+The bundle is kept clean for AI chat input: file tree, extracted contents, and failed/deferred/unsupported file lists. Detailed runtime information is written to the log file instead.
+
+You can override the bundle path with `-OutFile` when running `PromptPack.ps1` directly. The log file still goes under `logs/`.
 
 ## Optional Explorer context menu
 
@@ -140,18 +144,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\PromptPack.ps1 -Timeou
 
 For unattended tests, use `-DeferredAction Skip`.
 
-## Console UX
+## Console UX and logs
 
-PromptPack shows phase markers and visible progress:
+The console is intentionally minimal:
 
-- `SCAN`
-- `PLAN`
-- `EXTRACT`
-- `WRITE`
-- `DEFERRED`
-- `DONE`
+```text
+PromptPack
+Running...
+Done.
 
-Worker-backed operations show an ASCII spinner with current stage, elapsed seconds, and timeout limit.
+Output:
+...\output\promptpack_yyyyMMdd_HHmmss.txt
+
+Log:
+...\logs\promptpack_yyyyMMdd_HHmmss.log
+```
+
+Detailed progress is written to the run log instead of the console or bundle. The log includes input paths, collected file list, route decisions, worker start/exit, stage transitions, elapsed time, timeout stage, fallback reason, stdout/stderr, and final output path.
 
 ## Notes
 

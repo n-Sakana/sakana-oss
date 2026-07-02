@@ -48,6 +48,7 @@ $script:WorkerPidPath = ""
 $script:OwnedOfficePids = New-Object "System.Collections.Generic.HashSet[int]"
 $script:NativeHelperLoaded = $false
 $script:ForceComExtraction = $false
+$script:RunLogPath = ""
 
 function Initialize-NativeHelper {
     if ($script:NativeHelperLoaded) {
@@ -807,6 +808,74 @@ function Write-Warn {
 function Write-Fail {
     param([string]$Text)
     Write-Host ("[FAIL] " + $Text) -ForegroundColor Red
+}
+
+function Initialize-RunLog {
+    param([string]$Path)
+
+    $script:RunLogPath = $Path
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory -PathType Container)) {
+        [void](New-Item -ItemType Directory -Path $directory -Force)
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    $header = @(
+        "# PromptPack Run Log",
+        "Started At: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff zzz')",
+        "Process Id: $PID",
+        "Script Path: $PSCommandPath",
+        ""
+    ) -join "`r`n"
+    [System.IO.File]::WriteAllText($Path, ($header + "`r`n"), $utf8NoBom)
+}
+
+function Write-RunLog {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($script:RunLogPath)) {
+        return
+    }
+
+    try {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+        $line = "[{0}] {1}`r`n" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff zzz"), $Text
+        [System.IO.File]::AppendAllText($script:RunLogPath, $line, $utf8NoBom)
+    }
+    catch {
+    }
+}
+
+function Write-RunLogBlock {
+    param(
+        [string]$Title,
+        [string[]]$Lines
+    )
+
+    Write-RunLog -Text $Title
+    foreach ($line in $Lines) {
+        Write-RunLog -Text ("  " + [string]$line)
+    }
+}
+
+function Write-StageLogToRunLog {
+    param(
+        [string]$StagePath,
+        [string]$Prefix
+    )
+
+    if ([string]::IsNullOrWhiteSpace($StagePath) -or -not (Test-Path -LiteralPath $StagePath -PathType Leaf)) {
+        Write-RunLog -Text ("{0} stage log missing" -f $Prefix)
+        return
+    }
+
+    try {
+        $lines = @(Get-Content -LiteralPath $StagePath -ErrorAction Stop)
+        Write-RunLogBlock -Title ("{0} stage log" -f $Prefix) -Lines $lines
+    }
+    catch {
+        Write-RunLog -Text ("{0} stage log read failed: {1}" -f $Prefix, $_.Exception.Message)
+    }
 }
 
 function Set-WorkerStage {
@@ -1758,79 +1827,6 @@ function New-DeferredTimeoutResult {
     return New-ExtractionResult -No $No -Status "DEFERRED_TIMEOUT" -Type $kind -Path $File.FullName -Method $method -Notes ("Timeout after {0} seconds. Last stage: {1}" -f $TimeoutSeconds, $Stage) -Content ""
 }
 
-function Clear-CurrentConsoleLine {
-    try {
-        if ([Console]::IsOutputRedirected) {
-            return
-        }
-
-        $width = [Console]::BufferWidth
-        if ($width -lt 20) {
-            $width = 120
-        }
-
-        [Console]::CursorLeft = 0
-        [Console]::Write((" " * ([Math]::Min($width - 1, 220))))
-        [Console]::CursorLeft = 0
-    }
-    catch {
-    }
-}
-
-function Write-WorkerSpinner {
-    param(
-        [int]$Index,
-        [int]$Total,
-        [System.IO.FileInfo]$File,
-        [string]$Stage,
-        [int]$ElapsedSeconds,
-        [int]$TimeoutSeconds,
-        [string]$Spinner
-    )
-
-    $name = $File.Name
-    if ($name.Length -gt 48) {
-        $name = $name.Substring(0, 45) + "..."
-    }
-
-    $remainingSeconds = [Math]::Max(0, $TimeoutSeconds - $ElapsedSeconds)
-    $line = "[{0}/{1}] {2,-6} Working {3} Stage: {4} Elapsed: {5}s Left: {6}s  {7}" -f `
-        $Index,
-        $Total,
-        (Get-TypeCode -Path $File.FullName),
-        $Spinner,
-        $Stage,
-        $ElapsedSeconds,
-        $remainingSeconds,
-        $name
-
-    try {
-        if ([Console]::IsOutputRedirected) {
-            return
-        }
-
-        $width = [Console]::BufferWidth
-        if ($width -lt 20) {
-            return
-        }
-
-        if ($line.Length -gt ($width - 1)) {
-            $line = $line.Substring(0, $width - 2)
-        }
-        else {
-            $line = $line.PadRight($width - 1)
-        }
-
-        [Console]::CursorLeft = 0
-        [Console]::ForegroundColor = [ConsoleColor]::DarkCyan
-        [Console]::Write($line)
-        [Console]::ResetColor()
-    }
-    catch {
-        try { [Console]::ResetColor() } catch { }
-    }
-}
-
 function Invoke-FileExtractionWithTimeout {
     param(
         [System.IO.FileInfo]$File,
@@ -1853,6 +1849,9 @@ function Invoke-FileExtractionWithTimeout {
     $stderrPath = Join-Path -Path $jobDir -ChildPath "stderr.txt"
 
     try {
+        Write-RunLog -Text ("WORKER_START no={0} type={1} timeout={2}s force_com={3} path={4}" -f $No, (Get-TypeCode -Path $File.FullName), $TimeoutSeconds, [bool]$ForceCom.IsPresent, $File.FullName)
+        Write-RunLog -Text ("WORKER_JOB_DIR no={0} dir={1}" -f $No, $jobDir)
+
         $request = [pscustomobject]@{
             InputPath = $File.FullName
             No = $No
@@ -1892,25 +1891,23 @@ function Invoke-FileExtractionWithTimeout {
 
         $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
         $startTime = Get-Date
-        $spinnerChars = @("|", "/", "-", "\")
-        $spinnerIndex = 0
+        $lastStage = ""
         while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
-            if ($Index -gt 0 -and $Total -gt 0) {
-                $stage = Get-LatestWorkerStage -StagePath $stagePath
-                $elapsedSeconds = [int]((Get-Date) - $startTime).TotalSeconds
-                Write-WorkerSpinner -Index $Index -Total $Total -File $File -Stage $stage -ElapsedSeconds $elapsedSeconds -TimeoutSeconds $TimeoutSeconds -Spinner $spinnerChars[$spinnerIndex % $spinnerChars.Count]
-                $spinnerIndex++
+            $stage = Get-LatestWorkerStage -StagePath $stagePath
+            if ($stage -ne $lastStage) {
+                $elapsedMs = [int]((Get-Date) - $startTime).TotalMilliseconds
+                Write-RunLog -Text ("WORKER_STAGE no={0} stage={1} elapsed_ms={2}" -f $No, $stage, $elapsedMs)
+                $lastStage = $stage
             }
-            Start-Sleep -Milliseconds 250
-        }
-
-        if ($Index -gt 0 -and $Total -gt 0) {
-            Clear-CurrentConsoleLine
+            Start-Sleep -Milliseconds 500
         }
 
         $completed = $process.HasExited
         if (-not $completed) {
             $stage = Get-LatestWorkerStage -StagePath $stagePath
+            $elapsedSeconds = [int]((Get-Date) - $startTime).TotalSeconds
+            Write-RunLog -Text ("WORKER_TIMEOUT no={0} stage={1} elapsed_s={2} timeout_s={3}" -f $No, $stage, $elapsedSeconds, $TimeoutSeconds)
+            Write-StageLogToRunLog -StagePath $stagePath -Prefix ("WORKER no={0}" -f $No)
             Stop-OwnedOfficeProcessesFromFile -PidPath $pidPath
             try { $process.Kill() } catch { }
             try { [void]$process.WaitForExit(5000) } catch { }
@@ -1919,16 +1916,22 @@ function Invoke-FileExtractionWithTimeout {
 
         $stdout = $process.StandardOutput.ReadToEnd()
         $stderr = $process.StandardError.ReadToEnd()
+        Write-RunLog -Text ("WORKER_EXIT no={0} exit_code={1} elapsed_ms={2}" -f $No, $process.ExitCode, [int]((Get-Date) - $startTime).TotalMilliseconds)
+        Write-StageLogToRunLog -StagePath $stagePath -Prefix ("WORKER no={0}" -f $No)
         if (-not [string]::IsNullOrWhiteSpace($stdout)) {
             [System.IO.File]::WriteAllText($stdoutPath, $stdout)
+            Write-RunLogBlock -Title ("WORKER_STDOUT no={0}" -f $No) -Lines @($stdout -split "`r?`n")
         }
         if (-not [string]::IsNullOrWhiteSpace($stderr)) {
             [System.IO.File]::WriteAllText($stderrPath, $stderr)
+            Write-RunLogBlock -Title ("WORKER_STDERR no={0}" -f $No) -Lines @($stderr -split "`r?`n")
         }
 
         if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
             $json = [System.IO.File]::ReadAllText($resultPath, [System.Text.Encoding]::UTF8)
-            return ($json | ConvertFrom-Json)
+            $workerResult = $json | ConvertFrom-Json
+            Write-RunLog -Text ("WORKER_RESULT no={0} status={1} method={2} notes={3} content_chars={4}" -f $No, $workerResult.Status, $workerResult.Method, $workerResult.Notes, ([string]$workerResult.Content).Length)
+            return $workerResult
         }
 
         $kind = Get-FileKind -Path $File.FullName
@@ -1936,10 +1939,12 @@ function Invoke-FileExtractionWithTimeout {
         if (-not [string]::IsNullOrWhiteSpace($stderr)) {
             $notes = $notes + " " + $stderr.Trim()
         }
+        Write-RunLog -Text ("WORKER_NO_RESULT no={0} notes={1}" -f $No, $notes)
         return New-ExtractionResult -No $No -Status "FAIL" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes $notes -Content ""
     }
     catch {
         $kind = Get-FileKind -Path $File.FullName
+        Write-RunLog -Text ("WORKER_EXCEPTION no={0} message={1}" -f $No, $_.Exception.Message)
         return New-ExtractionResult -No $No -Status "FAIL" -Type $kind -Path $File.FullName -Method "$kind extraction" -Notes $_.Exception.Message -Content ""
     }
     finally {
@@ -1977,9 +1982,6 @@ function Build-OutputText {
     [void]$builder.AppendLine("")
     [void]$builder.AppendLine("Generated At: $GeneratedAt")
     [void]$builder.AppendLine("Tool: PromptPack.ps1")
-    [void]$builder.AppendLine("Output Path: $OutputPath")
-    [void]$builder.AppendLine("Main Timeout Seconds: $TimeoutSeconds")
-    [void]$builder.AppendLine("Retry Timeout Seconds: $RetryTimeoutSeconds")
     [void]$builder.AppendLine("Total Files: $($counts.Total)")
     [void]$builder.AppendLine("Succeeded: $($counts.OK)")
     [void]$builder.AppendLine("Failed: $($counts.Failed)")
@@ -2006,62 +2008,25 @@ function Build-OutputText {
     [void]$builder.AppendLine("")
     [void]$builder.AppendLine("---")
     [void]$builder.AppendLine("")
-    [void]$builder.AppendLine("## Extraction Summary")
-    [void]$builder.AppendLine("")
-    [void]$builder.AppendLine("| No | Status | Type | Path | Method | Notes |")
-    [void]$builder.AppendLine("|---:|---|---|---|---|---|")
-
-    foreach ($result in $Results) {
-        [void]$builder.AppendLine(("| {0} | {1} | {2} | {3} | {4} | {5} |" -f `
-            $result.No,
-            (ConvertTo-TableCell -Value $result.Status),
-            (ConvertTo-TableCell -Value $result.Type),
-            (ConvertTo-TableCell -Value $result.Path),
-            (ConvertTo-TableCell -Value $result.Method),
-            (ConvertTo-TableCell -Value $result.Notes)))
-    }
-
-    if ($script:ScanMessages.Count -gt 0) {
-        [void]$builder.AppendLine("")
-        [void]$builder.AppendLine("---")
-        [void]$builder.AppendLine("")
-        [void]$builder.AppendLine("## Scan Messages")
-        [void]$builder.AppendLine("")
-        foreach ($message in $script:ScanMessages) {
-            [void]$builder.AppendLine("- $message")
-        }
-    }
-
-    [void]$builder.AppendLine("")
-    [void]$builder.AppendLine("---")
-    [void]$builder.AppendLine("")
     [void]$builder.AppendLine("## Contents")
 
-    foreach ($result in $Results) {
+    $successful = @($Results | Where-Object { $_.Status -like "OK*" })
+    if ($successful.Count -eq 0) {
         [void]$builder.AppendLine("")
-        [void]$builder.AppendLine("### File $($result.No)")
-        [void]$builder.AppendLine("")
-        [void]$builder.AppendLine("Path: $($result.Path)")
-        [void]$builder.AppendLine("Type: $($result.Type)")
-        [void]$builder.AppendLine("Method: $($result.Method)")
-        [void]$builder.AppendLine("Status: $($result.Status)")
-        if (-not [string]::IsNullOrWhiteSpace($result.Notes)) {
-            [void]$builder.AppendLine("Notes: $($result.Notes)")
-        }
-        [void]$builder.AppendLine("")
-
-        if ($result.Status -like "OK*") {
+        [void]$builder.AppendLine("No content extracted.")
+    }
+    else {
+        foreach ($result in $successful) {
+            [void]$builder.AppendLine("")
+            [void]$builder.AppendLine("### File $($result.No)")
+            [void]$builder.AppendLine("")
+            [void]$builder.AppendLine("Path: $($result.Path)")
+            [void]$builder.AppendLine("Type: $($result.Type)")
+            [void]$builder.AppendLine("")
             [void]$builder.AppendLine($result.Content)
+            [void]$builder.AppendLine("")
+            [void]$builder.AppendLine("---")
         }
-        elseif ($result.Status -eq "DEFERRED_TIMEOUT") {
-            [void]$builder.AppendLine("Extraction was deferred because the file timed out during the main pass.")
-        }
-        else {
-            [void]$builder.AppendLine("No content extracted.")
-        }
-
-        [void]$builder.AppendLine("")
-        [void]$builder.AppendLine("---")
     }
 
     [void]$builder.AppendLine("")
@@ -2077,7 +2042,6 @@ function Build-OutputText {
             [void]$builder.AppendLine("")
             [void]$builder.AppendLine("Path: $($result.Path)")
             [void]$builder.AppendLine("Type: $($result.Type)")
-            [void]$builder.AppendLine("Method: $($result.Method)")
             [void]$builder.AppendLine("Reason: $($result.Notes)")
             [void]$builder.AppendLine("")
         }
@@ -2096,7 +2060,6 @@ function Build-OutputText {
             [void]$builder.AppendLine("")
             [void]$builder.AppendLine("Path: $($result.Path)")
             [void]$builder.AppendLine("Type: $($result.Type)")
-            [void]$builder.AppendLine("Method: $($result.Method)")
             [void]$builder.AppendLine("Reason: $($result.Notes)")
             [void]$builder.AppendLine("")
         }
@@ -2186,15 +2149,18 @@ function Invoke-OptimizedFileExtraction {
     }
 
     if ($kind -eq "Text") {
+        Write-RunLog -Text ("ROUTE no={0} route=text_direct" -f $No)
         return Invoke-FileExtraction -File $File -No $No
     }
 
     if (Test-OfficeOpenXmlFile -Path $File.FullName) {
+        Write-RunLog -Text ("ROUTE no={0} route=openxml_direct" -f $No)
         $xmlResult = Invoke-FileExtraction -File $File -No $No
         if ($xmlResult.Status -ne "FAIL") {
             return $xmlResult
         }
 
+        Write-RunLog -Text ("OPENXML_FALLBACK no={0} status={1} notes={2}" -f $No, $xmlResult.Status, $xmlResult.Notes)
         $fallbackResult = Invoke-FileExtractionWithTimeout -File $File -No $No -TimeoutSeconds $TimeoutSeconds -Index $Index -Total $Total -ForceCom
         if ([string]::IsNullOrWhiteSpace([string]$fallbackResult.Notes)) {
             $fallbackResult.Notes = "OpenXML failed: $($xmlResult.Notes)"
@@ -2205,14 +2171,8 @@ function Invoke-OptimizedFileExtraction {
         return $fallbackResult
     }
 
+    Write-RunLog -Text ("ROUTE no={0} route=worker_com_or_pdf" -f $No)
     return Invoke-FileExtractionWithTimeout -File $File -No $No -TimeoutSeconds $TimeoutSeconds -Index $Index -Total $Total
-}
-
-function Write-Phase {
-    param([string]$Name)
-
-    Write-Host ""
-    Write-Host ("Phase: {0}" -f $Name) -ForegroundColor Cyan
 }
 
 function Invoke-MainExtractionPass {
@@ -2226,10 +2186,14 @@ function Invoke-MainExtractionPass {
 
     foreach ($file in $Files) {
         $index++
+        Write-RunLog -Text ("FILE_START no={0} total={1} type={2} size={3} path={4}" -f $index, $Files.Count, (Get-TypeCode -Path $file.FullName), $file.Length, $file.FullName)
+        $started = Get-Date
 
         $result = Invoke-OptimizedFileExtraction -File $file -No $index -TimeoutSeconds $TimeoutSeconds -Index $index -Total $Files.Count
         $results.Add($result) | Out-Null
-        Write-StatusLine -Index $index -Total $Files.Count -Result $result
+
+        $elapsedMs = [int]((Get-Date) - $started).TotalMilliseconds
+        Write-RunLog -Text ("FILE_END no={0} status={1} method={2} notes={3} content_chars={4} elapsed_ms={5}" -f $index, $result.Status, $result.Method, $result.Notes, ([string]$result.Content).Length, $elapsedMs)
     }
 
     return ,$results
@@ -2246,10 +2210,12 @@ function Invoke-DeferredRetryPass {
         return
     }
 
-    Write-Section -Text "Retry Deferred Files"
+    Write-RunLog -Text ("RETRY_START count={0} timeout={1}s" -f $deferred.Count, $TimeoutSeconds)
     $retryIndex = 0
     foreach ($oldResult in $deferred) {
         $retryIndex++
+        Write-RunLog -Text ("RETRY_FILE_START retry_no={0} original_no={1} path={2}" -f $retryIndex, $oldResult.No, $oldResult.Path)
+        $started = Get-Date
 
         try {
             $file = Get-Item -LiteralPath $oldResult.Path -Force -ErrorAction Stop
@@ -2260,8 +2226,9 @@ function Invoke-DeferredRetryPass {
         }
 
         $Results[[int]$oldResult.No - 1] = $newResult
-        Write-StatusLine -Index $retryIndex -Total $deferred.Count -Result $newResult
+        Write-RunLog -Text ("RETRY_FILE_END retry_no={0} original_no={1} status={2} method={3} notes={4} content_chars={5} elapsed_ms={6}" -f $retryIndex, $oldResult.No, $newResult.Status, $newResult.Method, $newResult.Notes, ([string]$newResult.Content).Length, [int]((Get-Date) - $started).TotalMilliseconds)
     }
+    Write-RunLog -Text "RETRY_END"
 }
 
 function Get-DeferredRetryChoice {
@@ -2272,28 +2239,32 @@ function Get-DeferredRetryChoice {
         return "Skip"
     }
 
+    Write-RunLog -Text ("DEFERRED_FOUND count={0}" -f $deferred.Count)
+    foreach ($result in $deferred) {
+        Write-RunLog -Text ("DEFERRED_ITEM no={0} type={1} path={2} notes={3}" -f $result.No, $result.TypeCode, $result.Path, $result.Notes)
+    }
+
     if ($DeferredAction -eq "Retry") {
+        Write-RunLog -Text "DEFERRED_ACTION preset=Retry"
         return "Retry"
     }
 
     if ($DeferredAction -eq "Skip") {
+        Write-RunLog -Text "DEFERRED_ACTION preset=Skip"
         return "Skip"
     }
 
-    Write-Section -Text "Deferred Files"
-    Write-Host ("Deferred files found: {0}" -f $deferred.Count) -ForegroundColor Yellow
-    foreach ($result in $deferred) {
-        Write-Host ("[{0}] {1}  {2}" -f $result.No, $result.TypeCode, $result.Path) -ForegroundColor Gray
-        Write-Host ("    {0}" -f $result.Notes) -ForegroundColor DarkGray
-    }
-
     Write-Host ""
+    Write-Host ("Deferred files found: {0}" -f $deferred.Count) -ForegroundColor Yellow
+    Write-Host "See the log file for details." -ForegroundColor Gray
     Write-Host "Retry deferred files now? [R] Retry / [S] Skip (default: S): " -NoNewline -ForegroundColor Cyan
     $choice = Read-Host
     if ($choice -match '^[Rr]') {
+        Write-RunLog -Text "DEFERRED_ACTION user=Retry"
         return "Retry"
     }
 
+    Write-RunLog -Text "DEFERRED_ACTION user=Skip"
     return "Skip"
 }
 
@@ -2302,14 +2273,11 @@ function Invoke-PromptPack {
         throw "No input paths were provided."
     }
 
-    Write-Section -Text "PromptPack"
-    Write-Info -Text ("Main timeout seconds: {0}" -f $TimeoutSeconds)
-    Write-Info -Text ("Retry timeout seconds: {0}" -f $RetryTimeoutSeconds)
+    $scriptDirectory = Split-Path -Parent $PSCommandPath
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
     if ([string]::IsNullOrWhiteSpace($OutFile)) {
-        $scriptDirectory = Split-Path -Parent $PSCommandPath
         $outputDirectory = Join-Path -Path $scriptDirectory -ChildPath "output"
-        $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $OutFile = Join-Path -Path $outputDirectory -ChildPath ("promptpack_{0}.txt" -f $stamp)
     }
 
@@ -2319,41 +2287,74 @@ function Invoke-PromptPack {
         [void](New-Item -ItemType Directory -Path $outputDirectory -Force)
     }
 
-    Write-Info -Text ("Output path: {0}" -f $outputFullPath)
-    Write-Phase -Name "SCAN"
-    Write-Info -Text "Collecting files..."
+    $logDirectory = Join-Path -Path $scriptDirectory -ChildPath "logs"
+    if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
+        [void](New-Item -ItemType Directory -Path $logDirectory -Force)
+    }
+    $logFullPath = Join-Path -Path $logDirectory -ChildPath ("promptpack_{0}.log" -f $stamp)
+    Initialize-RunLog -Path $logFullPath
 
+    Write-Host ""
+    Write-Host "PromptPack" -ForegroundColor Cyan
+    Write-Host "Running..." -ForegroundColor Gray
+
+    Write-RunLog -Text "RUN_START"
+    Write-RunLog -Text ("CONFIG timeout={0}s retry_timeout={1}s deferred_action={2}" -f $TimeoutSeconds, $RetryTimeoutSeconds, $DeferredAction)
+    Write-RunLog -Text ("OUTPUT_PATH {0}" -f $outputFullPath)
+    Write-RunLog -Text ("LOG_PATH {0}" -f $logFullPath)
+    Write-RunLogBlock -Title "INPUT_PATHS" -Lines $InputPaths
+
+    Write-RunLog -Text "SCAN_START"
     $fileTree = Build-FileTree -Paths $InputPaths
     $files = @(Collect-InputFiles -Paths $InputPaths)
+    Write-RunLog -Text ("SCAN_END files={0} messages={1}" -f $files.Count, $script:ScanMessages.Count)
+
+    if ($script:ScanMessages.Count -gt 0) {
+        Write-RunLogBlock -Title "SCAN_MESSAGES" -Lines $script:ScanMessages.ToArray()
+    }
 
     if ($files.Count -eq 0) {
         throw "No files were found."
     }
 
-    Write-Phase -Name "PLAN"
-    Write-Info -Text ("Files found: {0}" -f $files.Count)
+    $fileLines = @($files | ForEach-Object { "{0}`t{1}`t{2}" -f (Get-TypeCode -Path $_.FullName), $_.Length, $_.FullName })
+    Write-RunLogBlock -Title "FILE_LIST" -Lines $fileLines
 
-    Write-Phase -Name "EXTRACT"
+    Write-RunLog -Text "EXTRACT_START"
     $results = Invoke-MainExtractionPass -Files $files -TimeoutSeconds $TimeoutSeconds
+    Write-RunLog -Text "EXTRACT_END"
 
-    Write-Phase -Name "WRITE"
+    Write-RunLog -Text "WRITE_START"
     Write-BundleOutput -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -OutputPath $outputFullPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
-    Write-Summary -Title "Main Pass Completed" -OutputPath $outputFullPath -Results $results.ToArray()
+    Write-RunLog -Text ("WRITE_END output={0}" -f $outputFullPath)
 
     $retryChoice = Get-DeferredRetryChoice -Results $results.ToArray()
     if ($retryChoice -eq "Retry") {
-        Write-Phase -Name "DEFERRED"
+        Write-Host "Retrying deferred files..." -ForegroundColor Gray
         Invoke-DeferredRetryPass -Results $results -TimeoutSeconds $RetryTimeoutSeconds
-        Write-Phase -Name "WRITE"
+        Write-RunLog -Text "WRITE_RETRY_START"
         Write-BundleOutput -InputPaths $InputPaths -FileTree $fileTree -Results $results.ToArray() -OutputPath $outputFullPath -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds $RetryTimeoutSeconds
-        Write-Summary -Title "Retry Completed" -OutputPath $outputFullPath -Results $results.ToArray()
+        Write-RunLog -Text ("WRITE_RETRY_END output={0}" -f $outputFullPath)
     }
     elseif (@($results | Where-Object { $_.Status -eq "DEFERRED_TIMEOUT" }).Count -gt 0) {
-        Write-Info -Text "Deferred retry skipped."
+        Write-RunLog -Text "DEFERRED_RETRY_SKIPPED"
     }
 
-    Write-Phase -Name "DONE"
     $counts = Get-ResultCounts -Results $results.ToArray()
+    Write-RunLog -Text ("RUN_SUMMARY ok={0} failed={1} deferred={2} unsupported={3} total={4}" -f $counts.OK, $counts.Failed, $counts.Deferred, $counts.Unsupported, $counts.Total)
+    Write-RunLog -Text "RUN_END"
+
+    Write-Host ""
+    Write-Host "Done." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Output:" -ForegroundColor Gray
+    Write-Host $outputFullPath -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Log:" -ForegroundColor Gray
+    Write-Host $logFullPath -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host ("Summary: OK={0} Failed={1} Deferred={2} Unsupported={3} Total={4}" -f $counts.OK, $counts.Failed, $counts.Deferred, $counts.Unsupported, $counts.Total) -ForegroundColor Gray
+
     if ($counts.Failed -gt 0 -or $counts.Deferred -gt 0 -or $script:ScanMessages.Count -gt 0) {
         $script:ExitCode = 1
     }
@@ -2369,8 +2370,14 @@ try {
 }
 catch {
     if (-not $Worker) {
+        Write-RunLog -Text ("RUN_ERROR message={0}" -f $_.Exception.Message)
         Write-Section -Text "Error"
         Write-Fail -Text $_.Exception.Message
+        if (-not [string]::IsNullOrWhiteSpace($script:RunLogPath)) {
+            Write-Host ""
+            Write-Host "Log:" -ForegroundColor Gray
+            Write-Host $script:RunLogPath -ForegroundColor Cyan
+        }
     }
     $script:ExitCode = 1
 }
