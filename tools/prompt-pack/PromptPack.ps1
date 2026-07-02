@@ -61,6 +61,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
+using System.Xml;
 
 public sealed class PromptPackTextResult
 {
@@ -194,6 +195,105 @@ public static class PromptPackNativeHelper
         }
 
         return CleanExtractedText(output.ToString());
+    }
+
+    public static string ExtractDocxText(string path)
+    {
+        StringBuilder output = new StringBuilder();
+
+        using (FileStream file = File.OpenRead(path))
+        using (ZipArchive archive = new ZipArchive(file, ZipArchiveMode.Read))
+        {
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                string name = entry.FullName.Replace('\\', '/');
+                if (!IsWordTextPart(name))
+                {
+                    continue;
+                }
+
+                using (Stream stream = entry.Open())
+                using (StreamReader reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    AppendWordXmlText(reader.ReadToEnd(), output);
+                }
+
+                if (output.Length > 0 && output[output.Length - 1] != '\n')
+                {
+                    output.AppendLine();
+                }
+            }
+        }
+
+        return CleanExtractedText(output.ToString());
+    }
+
+    private static bool IsWordTextPart(string name)
+    {
+        if (!name.StartsWith("word/", StringComparison.OrdinalIgnoreCase) ||
+            !name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (String.Equals(name, "word/document.xml", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string fileName = Path.GetFileName(name);
+        return fileName.StartsWith("header", StringComparison.OrdinalIgnoreCase) ||
+               fileName.StartsWith("footer", StringComparison.OrdinalIgnoreCase) ||
+               fileName.StartsWith("footnotes", StringComparison.OrdinalIgnoreCase) ||
+               fileName.StartsWith("endnotes", StringComparison.OrdinalIgnoreCase) ||
+               fileName.StartsWith("comments", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AppendWordXmlText(string xml, StringBuilder output)
+    {
+        XmlReaderSettings settings = new XmlReaderSettings();
+        settings.DtdProcessing = DtdProcessing.Ignore;
+        settings.XmlResolver = null;
+
+        using (StringReader stringReader = new StringReader(xml))
+        using (XmlReader reader = XmlReader.Create(stringReader, settings))
+        {
+            while (reader.Read())
+            {
+                if (reader.NodeType == XmlNodeType.Element)
+                {
+                    string localName = reader.LocalName;
+                    if (localName == "t" || localName == "instrText")
+                    {
+                        output.Append(reader.ReadElementContentAsString());
+                    }
+                    else if (localName == "tab")
+                    {
+                        output.Append('\t');
+                    }
+                    else if (localName == "br" || localName == "cr")
+                    {
+                        output.AppendLine();
+                    }
+                }
+                else if (reader.NodeType == XmlNodeType.EndElement)
+                {
+                    string localName = reader.LocalName;
+                    if (localName == "p")
+                    {
+                        output.AppendLine();
+                    }
+                    else if (localName == "tc")
+                    {
+                        output.Append('\t');
+                    }
+                    else if (localName == "tr")
+                    {
+                        output.AppendLine();
+                    }
+                }
+            }
+        }
     }
 
     private static int FindNextStreamMarker(string raw, int start)
@@ -756,7 +856,7 @@ public static class PromptPackNativeHelper
 }
 '@
 
-    Add-Type -TypeDefinition $source -Language CSharp
+    Add-Type -TypeDefinition $source -Language CSharp -ReferencedAssemblies @("System.IO.Compression", "System.IO.Compression.FileSystem", "System.Xml")
     $script:NativeHelperLoaded = $true
 }
 
@@ -1091,6 +1191,24 @@ function Read-WordLikeFile {
 function Read-WordFile {
     param([string]$Path)
     return Read-WordLikeFile -Path $Path -Method "Word COM" -OpenStage "OPEN_DOCUMENT"
+}
+
+function Read-DocxFileDirect {
+    param([string]$Path)
+
+    Set-WorkerStage -Stage "READ_DOCX_OPENXML"
+    Initialize-NativeHelper
+    $text = [PromptPackNativeHelper]::ExtractDocxText($Path)
+
+    if (-not (Test-UsableExtractedText -Text $text)) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Content = $text
+        Method = "DOCX OpenXML"
+        Notes = "Direct extraction"
+    }
 }
 
 function Read-PdfFileWithWord {
@@ -1654,16 +1772,21 @@ function New-DeferredTimeoutResult {
 
 function Clear-CurrentConsoleLine {
     try {
-        $width = [Console]::WindowWidth
+        if ([Console]::IsOutputRedirected) {
+            return
+        }
+
+        $width = [Console]::BufferWidth
         if ($width -lt 20) {
             $width = 120
         }
+
+        [Console]::CursorLeft = 0
+        [Console]::Write((" " * ([Math]::Min($width - 1, 220))))
+        [Console]::CursorLeft = 0
     }
     catch {
-        $width = 120
     }
-
-    Write-Host ("`r" + (" " * ([Math]::Min($width - 1, 180))) + "`r") -NoNewline
 }
 
 function Write-WorkerSpinner {
@@ -1682,26 +1805,42 @@ function Write-WorkerSpinner {
         $name = $name.Substring(0, 45) + "..."
     }
 
-    $line = "[{0}/{1}] {2,-6} Working {3} Stage: {4} Elapsed: {5}s / {6}s  {7}" -f `
+    $remainingSeconds = [Math]::Max(0, $TimeoutSeconds - $ElapsedSeconds)
+    $line = "[{0}/{1}] {2,-6} Working {3} Stage: {4} Elapsed: {5}s Left: {6}s  {7}" -f `
         $Index,
         $Total,
         (Get-TypeCode -Path $File.FullName),
         $Spinner,
         $Stage,
         $ElapsedSeconds,
-        $TimeoutSeconds,
+        $remainingSeconds,
         $name
 
     try {
-        $width = [Console]::WindowWidth
-        if ($width -gt 20 -and $line.Length -gt ($width - 1)) {
+        if ([Console]::IsOutputRedirected) {
+            return
+        }
+
+        $width = [Console]::BufferWidth
+        if ($width -lt 20) {
+            return
+        }
+
+        if ($line.Length -gt ($width - 1)) {
             $line = $line.Substring(0, $width - 2)
         }
+        else {
+            $line = $line.PadRight($width - 1)
+        }
+
+        [Console]::CursorLeft = 0
+        [Console]::ForegroundColor = [ConsoleColor]::DarkCyan
+        [Console]::Write($line)
+        [Console]::ResetColor()
     }
     catch {
+        try { [Console]::ResetColor() } catch { }
     }
-
-    Write-Host ("`r" + $line) -NoNewline -ForegroundColor DarkCyan
 }
 
 function Invoke-FileExtractionWithTimeout {
@@ -2060,6 +2199,19 @@ function Invoke-OptimizedFileExtraction {
         return Invoke-FileExtraction -File $File -No $No
     }
 
+    $extension = [System.IO.Path]::GetExtension($File.FullName).ToLowerInvariant()
+    if ($kind -eq "Word" -and ($extension -eq ".docx" -or $extension -eq ".docm")) {
+        try {
+            $directWord = Read-DocxFileDirect -Path $File.FullName
+            if ($null -ne $directWord) {
+                return New-ExtractionResult -No $No -Status "OK_WORD_TEXT" -Type $kind -Path $File.FullName -Method $directWord.Method -Notes $directWord.Notes -Content $directWord.Content
+            }
+        }
+        catch {
+            Write-Warn -Text ("Direct DOCX extraction failed, falling back to Word: {0}" -f $_.Exception.Message)
+        }
+    }
+
     if ($kind -eq "PDF") {
         try {
             $direct = Read-PdfFileDirect -Path $File.FullName
@@ -2093,15 +2245,12 @@ function Invoke-MainExtractionPass {
 
     foreach ($file in $Files) {
         $index++
-        $percent = [int](($index / [double]$Files.Count) * 100)
-        Write-Progress -Activity "PromptPack" -Status ("Extracting {0} of {1}" -f $index, $Files.Count) -PercentComplete $percent
 
         $result = Invoke-OptimizedFileExtraction -File $file -No $index -TimeoutSeconds $TimeoutSeconds -Index $index -Total $Files.Count
         $results.Add($result) | Out-Null
         Write-StatusLine -Index $index -Total $Files.Count -Result $result
     }
 
-    Write-Progress -Activity "PromptPack" -Completed
     return ,$results
 }
 
@@ -2120,8 +2269,6 @@ function Invoke-DeferredRetryPass {
     $retryIndex = 0
     foreach ($oldResult in $deferred) {
         $retryIndex++
-        $percent = [int](($retryIndex / [double]$deferred.Count) * 100)
-        Write-Progress -Activity "PromptPack Retry" -Status ("Retrying {0} of {1}" -f $retryIndex, $deferred.Count) -PercentComplete $percent
 
         try {
             $file = Get-Item -LiteralPath $oldResult.Path -Force -ErrorAction Stop
@@ -2134,8 +2281,6 @@ function Invoke-DeferredRetryPass {
         $Results[[int]$oldResult.No - 1] = $newResult
         Write-StatusLine -Index $retryIndex -Total $deferred.Count -Result $newResult
     }
-
-    Write-Progress -Activity "PromptPack Retry" -Completed
 }
 
 function Get-DeferredRetryChoice {
