@@ -7,10 +7,38 @@ Slack用の文字ベース絵文字セットです。
 - 1ファイル 128KB 以下
 - 縁取り・シャドウなしのフラット色文字
 - 基本は極太ゴシック
-- 1〜3文字は横一列、3文字は横方向に圧縮して高さを確保
+- 1〜3文字は横一列、潰れやすい3文字は2+1配置
 - 4文字は2×2配置
 - 余白は最小化
 - 高解像度で描画してから縮小し、ラスタ消し込みは使わない
+
+## Color variants
+
+同じ文字・同じ配置で、共通色のバリエーションも用意しています。
+
+- `slack-text-reactions-20260701-v2-colors.zip`
+- `preview-colors.png`
+
+ZIP内のPNGは `png-color/` 配下に入っています。
+`generate.py` を実行すると、作業ディレクトリにも同じ `png-color/` が生成されます。
+
+色は Slack の小表示でも沈みにくい濃いめの7色です。
+
+- `_red`
+- `_orange`
+- `_green`
+- `_blue`
+- `_purple`
+- `_yellow`
+- `_gray`
+
+例:
+
+- `:youkoso_red:` — ようこそ / red
+- `:youkoso_blue:` — ようこそ / blue
+- `:kansha_green:` — 感謝 / green
+- `:majika_purple:` — マジか / purple
+- `:kami_yellow:` — 神 / yellow
 
 ## Files
 
@@ -41,6 +69,27 @@ Slack用の文字ベース絵文字セットです。
 - `:kami:` — 神
 - `:muri:` — 無理
 - `:tsurai:` — つらい
+- `:tasukaru:` — 助かる
+- `:kanmuryou:` — 感無量
+- `:thanks:` — サンクス
+- `:doumo:` — どうも
+- `:wakaru:` — わかる
+- `:tashikani:` — たしかに
+- `:aruaru:` — あるある
+- `:kyoukan:` — 共感
+- `:igi_nashi:` — 異議なし
+- `:ganbare:` — がんばれ
+- `:odaijini:` — お大事に
+- `:muri_sezu:` — 無理せず
+- `:fight:` — ファイト
+- `:arigato:` — ありがと
+- `:thx:` — thx!
+- `:iizo:` — いいぞ！
+- `:go:` — Go‼︎
+- `:dame_desu:` — ダメです
+- `:okotowari:` — お断り
+- `:hee:` — へぇ
+- `:kyougaku:` — 驚愕
 
 ## Generation
 

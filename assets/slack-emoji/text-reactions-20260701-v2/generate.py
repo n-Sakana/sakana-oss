@@ -8,8 +8,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 PNG_DIR = ROOT / "png"
+COLOR_DIR = ROOT / "png-color"
 ZIP_PATH = ROOT / "slack-text-reactions-20260701-v2.zip"
+COLOR_ZIP_PATH = ROOT / "slack-text-reactions-20260701-v2-colors.zip"
 PREVIEW_PATH = ROOT / "preview.png"
+COLOR_PREVIEW_PATH = ROOT / "preview-colors.png"
 FONT_CANDIDATES = [
     Path(os.environ["SLACK_EMOJI_FONT"]) if os.environ.get("SLACK_EMOJI_FONT") else None,
     Path("/home/ubuntu/.local/share/fonts/NotoSansCJKjp-Bold.otf"),
@@ -53,6 +56,56 @@ ITEMS = [
     ("kami", "神", "#C58B00"),
     ("muri", "無理", "#5B6472"),
     ("tsurai", "つらい", "#6B7280"),
+    ("tasukaru", "助かる", "#047857"),
+    ("kanmuryou", "感無量", "#0F766E"),
+    ("thanks", "サンクス", "#2563EB"),
+    ("doumo", "どうも", "#16877B"),
+    ("wakaru", "わかる", "#008C9E"),
+    ("tashikani", "たしかに", "#246BBA"),
+    ("aruaru", "あるある", "#7E57C2"),
+    ("kyoukan", "共感", "#0B9954"),
+    ("igi_nashi", "異議なし", "#374151"),
+    ("ganbare", "がんばれ", "#D9480F"),
+    ("odaijini", "お大事に", "#159947"),
+    ("muri_sezu", "無理せず", "#5B6472"),
+    ("fight", "ファイト", "#E23A1A"),
+    ("arigato", "ありがと", "#047857"),
+    ("thx", "thx!", "#2563EB"),
+    ("iizo", "いいぞ！", "#159947"),
+    ("go", "Go‼︎", "#E23A1A"),
+    ("dame_desu", "ダメです", "#B91C1C"),
+    ("okotowari", "お断り", "#374151"),
+    ("hee", "へぇ", "#6D5AE6"),
+    ("kyougaku", "驚愕", "#DB2777"),
+]
+
+LINE_LAYOUT_TEXTS = {
+    "thx!",
+    "いいぞ！",
+    "Go‼︎",
+}
+
+# Complex glyphs can collapse when forced into the generic compact logo rules.
+# Keep the rest of the set aggressive, but give these labels custom geometry.
+STACK_2_1_TEXTS = {
+    "感無量",
+}
+
+LINE_OVERRIDES = {
+    # Stroke-based weight makes the dense kanji interiors merge at Slack size.
+    "驚愕": {"font_px": 110, "stroke_px": 0, "target": (126, 108)},
+}
+
+# Slackの小表示で沈みにくい、濃いめの共通カラーバリエーション。
+# 黄色系は純黄色ではなくゴールド寄りにして、白背景でも読める濃度にする。
+COLOR_VARIANTS = [
+    ("red", "#E23A1A"),
+    ("orange", "#D9480F"),
+    ("green", "#159947"),
+    ("blue", "#2563EB"),
+    ("purple", "#7E57C2"),
+    ("yellow", "#C58B00"),
+    ("gray", "#374151"),
 ]
 
 
@@ -133,7 +186,31 @@ def _grid(text: str, color: str) -> Image.Image:
     return canvas.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
 
 
+def _grid_2_1(text: str, color: str) -> Image.Image:
+    top = _resize_exact(_raw_text(text[:2], color, 100, 1), 126, 62)
+    bottom = _resize_exact(_raw_text(text[2:], color, 100, 1), 76, 58)
+    gap = -1 * SCALE
+    total_h = top.height + bottom.height + gap
+    canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    y = (W - total_h) // 2
+    canvas.alpha_composite(top, ((W - top.width) // 2, y))
+    y += top.height + gap
+    canvas.alpha_composite(bottom, ((W - bottom.width) // 2, y))
+    return canvas.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
+
+
 def make_emoji(text: str, color: str) -> Image.Image:
+    if text in STACK_2_1_TEXTS:
+        return _grid_2_1(text, color)
+    if text in LINE_OVERRIDES:
+        override = LINE_OVERRIDES[text]
+        raw = _raw_text(text, color, override["font_px"], override["stroke_px"])
+        part = _resize_exact(raw, *override["target"])
+        canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        _paste_center(canvas, part)
+        return canvas.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
+    if text in LINE_LAYOUT_TEXTS:
+        return _line(text, color)
     if len(text) == 4:
         return _grid(text, color)
     return _line(text, color)
@@ -152,19 +229,44 @@ def make_preview(items: list[tuple[str, str, str]]) -> Image.Image:
     return bg.convert("RGB")
 
 
+def make_color_preview(items: list[tuple[str, str, str]]) -> Image.Image:
+    cols = len(COLOR_VARIANTS)
+    cell = 128
+    rows = len(items)
+    bg = Image.new("RGBA", (cols * cell, rows * cell), "#f8f8f8")
+    for row, (slug, _text, _color) in enumerate(items):
+        for col, (variant, _variant_color) in enumerate(COLOR_VARIANTS):
+            img = Image.open(COLOR_DIR / f"{slug}_{variant}.png").convert("RGBA")
+            x = col * cell
+            y = row * cell
+            bg.alpha_composite(img, (x, y))
+    return bg.convert("RGB")
+
+
 def main() -> None:
     if FONT is None:
         raise SystemExit("font not found: set SLACK_EMOJI_FONT to a Japanese gothic font")
     PNG_DIR.mkdir(parents=True, exist_ok=True)
+    COLOR_DIR.mkdir(parents=True, exist_ok=True)
     for slug, text, color in ITEMS:
         img = make_emoji(text, color)
         img.save(PNG_DIR / f"{slug}.png", optimize=True)
+        for variant, variant_color in COLOR_VARIANTS:
+            variant_img = make_emoji(text, variant_color)
+            variant_img.save(COLOR_DIR / f"{slug}_{variant}.png", optimize=True)
     preview = make_preview(ITEMS)
     preview.save(PREVIEW_PATH, optimize=True)
+    color_preview = make_color_preview(ITEMS)
+    color_preview.save(COLOR_PREVIEW_PATH, optimize=True)
     with ZipFile(ZIP_PATH, "w", compression=ZIP_DEFLATED, compresslevel=9) as zf:
         for slug, _, _ in ITEMS:
             path = PNG_DIR / f"{slug}.png"
             zf.write(path, arcname=f"png/{path.name}")
+    with ZipFile(COLOR_ZIP_PATH, "w", compression=ZIP_DEFLATED, compresslevel=9) as zf:
+        for slug, _, _ in ITEMS:
+            for variant, _ in COLOR_VARIANTS:
+                path = COLOR_DIR / f"{slug}_{variant}.png"
+                zf.write(path, arcname=f"png-color/{path.name}")
 
 
 if __name__ == "__main__":
