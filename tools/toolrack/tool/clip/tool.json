@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "clip",
+  "name": "Clip",
+  "on": ["background", "folder"],
+  "run": { "type": "powershell", "entry": "main.ps1", "window": "hidden" },
+  "variants": [
+    { "id": "codex",         "label": "codex (bypass)",             "args": ["-Key", "codex"] },
+    { "id": "codex-resume",  "label": "codex resume (bypass)",      "args": ["-Key", "codex-resume"] },
+    { "id": "claude",        "label": "claude (skip perms)",        "args": ["-Key", "claude"] },
+    { "id": "claude-resume", "label": "claude resume (skip perms)", "args": ["-Key", "claude-resume"] }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "host-latency",
+  "name": "Host Latency Fixture",
+  "on": ["background"],
+  "run": {
+    "type": "powershell",
+    "entry": "main.ps1",
+    "window": "gui"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "snippets": [
+    { "key": "codex",         "label": "codex (bypass)",             "text": "codex --dangerously-bypass-approvals-and-sandbox" },
+    { "key": "codex-resume",  "label": "codex resume (bypass)",      "text": "codex resume --dangerously-bypass-approvals-and-sandbox" },
+    { "key": "claude",        "label": "claude (skip perms)",        "text": "claude --dangerously-skip-permissions" },
+    { "key": "claude-resume", "label": "claude resume (skip perms)", "text": "claude --resume --dangerously-skip-permissions" }
+  ]
+}

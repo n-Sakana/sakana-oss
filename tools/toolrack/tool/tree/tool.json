@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "tree",
+  "name": "Tree",
+  "on": ["folder", "background"],
+  "run": { "type": "powershell", "entry": "main.ps1" },
+  "variants": [
+    { "id": "depth-3",  "label": "Depth 3 (default)", "args": ["-Depth", "3"] },
+    { "id": "depth-5",  "label": "Depth 5",           "args": ["-Depth", "5"] },
+    { "id": "unlimited", "label": "Unlimited",         "args": ["-Depth", "0"] },
+    { "id": "custom",   "label": "Custom...",         "args": [] }
+  ]
+}

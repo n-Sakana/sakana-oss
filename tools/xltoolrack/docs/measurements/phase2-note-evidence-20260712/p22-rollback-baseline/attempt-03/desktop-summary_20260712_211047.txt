@@ -1,0 +1,42 @@
+﻿xltoolrack live desktop measurement
+===================================
+Excel PID                 : 13376
+Measurement seconds       : 90
+Cursor target rate        : 250 Hz
+Cursor resolution (ms)   : 4.000
+Cursor effective rate    : 249.8 Hz
+Cursor gap P95 (ms)      : 4.178
+Cursor sampler priority   : High
+Tools started by script   : 
+Foreground PID start/end  : 13376 / 13376
+Excel foreground rate    : 100.00%
+Excel visible start/end   : True
+Cursor position changes   : 474
+Activity source           : controlled
+Pointer activity observed : True
+Active jobs start/end     : 7 / 7
+Expected active jobs      : 7
+Active job check passed   : True
+Pump samples              : 91
+Minimum pump samples      : 70
+Pump profile valid        : True
+Cursor measurement valid  : True
+Window valid              : True
+Fresh-result ticks        : 87
+Fresh records total/max   : 586 / 7
+Tick elapsed P50 (ms)     : 23.438
+Tick elapsed P95 (ms)     : 39.063
+Tick elapsed max (ms)     : 54.688
+Fresh tick P95 (ms)       : 39.063
+Aggregate read P95 (ms)   : 23.438
+PumpOnce P95 (ms)         : 31.250
+Dispatch P95 (ms)         : 15.625
+Error poll P95 (ms)       : 0.000
+Cleanup P95 (ms)          : 0.000
+Flush tools max/tick      : 0
+WAIT onset count          : 106
+WAIT duration P50 (ms)    : 4.008
+WAIT duration P95 (ms)    : 7.996
+WAIT duration max (ms)    : 12.009
+Pump profile              : C:\Users\ynisi\AppData\Local\Temp\xltoolrack-phase2-evidence-20260712\p22-rollback-baseline\attempt-03\pump-profile_20260712_211047.csv
+Cursor summary            : C:\Users\ynisi\AppData\Local\Temp\xltoolrack-phase2-evidence-20260712\p22-rollback-baseline\attempt-03\cursor-summary_20260712_211047.txt

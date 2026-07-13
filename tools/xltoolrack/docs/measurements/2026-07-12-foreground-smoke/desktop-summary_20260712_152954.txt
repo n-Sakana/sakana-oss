@@ -1,0 +1,17 @@
+xltoolrack live desktop measurement
+===================================
+Excel PID                 : 23952
+Measurement seconds       : 15
+Tools started by script   : 
+Active jobs start/end     : 7 / 7
+Pump samples              : 0
+Fresh-result ticks        : 0
+Fresh records total/max   : 0 / 0
+Tick elapsed P50 (ms)     : 0.000
+Tick elapsed P95 (ms)     : 0.000
+Tick elapsed max (ms)     : 0.000
+Fresh tick P95 (ms)       : 0.000
+Aggregate read P95 (ms)   : 0.000
+Flush tools max/tick      : 0
+Pump profile              : C:\repos\pub\xltoolrack\docs\measurements\2026-07-12-foreground-smoke\pump-profile_20260712_152954.csv
+Cursor summary            : C:\repos\pub\xltoolrack\docs\measurements\2026-07-12-foreground-smoke\cursor-summary_20260712_152954.txt

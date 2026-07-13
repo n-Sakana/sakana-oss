@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "id": "md-extract",
+  "name": "MD Extract",
+  "on": ["file", "folder"],
+  "run": { "type": "powershell", "entry": "main.ps1" },
+  "variants": [
+    { "id": "default",     "label": "Default",     "args": [] },
+    { "id": "timeout-300", "label": "Timeout 300", "args": ["-TimeoutSeconds", "300"] },
+    { "id": "custom",      "label": "Custom...",   "args": ["-Custom"] }
+  ]
+}

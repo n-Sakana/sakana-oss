@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "timer",
+  "name": "Timer",
+  "on": ["background"],
+  "run": { "type": "powershell", "entry": "main.ps1", "window": "gui" },
+  "variants": [
+    { "id": "5-min",  "label": "5 min",             "args": ["-Minutes", "5"] },
+    { "id": "10-min", "label": "10 min",            "args": ["-Minutes", "10"] },
+    { "id": "25-min", "label": "25 min (pomodoro)", "args": ["-Minutes", "25"] },
+    { "id": "custom", "label": "Custom...",         "args": [] }
+  ]
+}

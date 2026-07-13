@@ -1,0 +1,10 @@
+﻿{
+    "Attempt":  1,
+    "Valid":  true,
+    "WaitOnsets":  141,
+    "PumpSamples":  90,
+    "Error":  null,
+    "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-01",
+    "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-01\\desktop-summary_20260712_210739.txt",
+    "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-01\\controlled-activity.json"
+}

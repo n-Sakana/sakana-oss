@@ -1,0 +1,47 @@
+﻿{
+    "Label":  "p23-subdir-pre-exclusion",
+    "ExcelPid":  14080,
+    "StartedAt":  "2026-07-12T21:23:56.6091310+09:00",
+    "CompletedAt":  "2026-07-12T21:29:00.2261982+09:00",
+    "MeasurementSeconds":  90,
+    "SampleRateHz":  250,
+    "ActivitySource":  "controlled SendInput mouse-move only",
+    "RequiredValidWindows":  3,
+    "RequiredWaitOnsets":  30,
+    "AttemptCount":  3,
+    "ValidWindowCount":  3,
+    "TotalWaitOnsets":  304,
+    "Passed":  true,
+    "Attempts":  [
+                     {
+                         "Attempt":  1,
+                         "Valid":  true,
+                         "WaitOnsets":  100,
+                         "PumpSamples":  91,
+                         "Error":  null,
+                         "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-01",
+                         "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-01\\desktop-summary_20260712_212552.txt",
+                         "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-01\\controlled-activity.json"
+                     },
+                     {
+                         "Attempt":  2,
+                         "Valid":  true,
+                         "WaitOnsets":  107,
+                         "PumpSamples":  90,
+                         "Error":  null,
+                         "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-02",
+                         "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-02\\desktop-summary_20260712_212726.txt",
+                         "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-02\\controlled-activity.json"
+                     },
+                     {
+                         "Attempt":  3,
+                         "Valid":  true,
+                         "WaitOnsets":  97,
+                         "PumpSamples":  90,
+                         "Error":  null,
+                         "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-03",
+                         "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-03\\desktop-summary_20260712_212859.txt",
+                         "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-03\\controlled-activity.json"
+                     }
+                 ]
+}

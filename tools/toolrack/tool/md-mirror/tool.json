@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "md-mirror",
+  "name": "MD Mirror",
+  "on": ["file", "folder", "background"],
+  "run": { "type": "powershell", "entry": "main.ps1" },
+  "variants": [
+    { "id": "create",            "label": "Create MD from File/Folder", "args": ["-Mode", "create"] },
+    { "id": "restore-file",      "label": "Restore from MD File",       "args": ["-Mode", "restore-file"] },
+    { "id": "restore-clipboard", "label": "Restore from Clipboard",     "args": ["-Mode", "restore-clipboard"] },
+    { "id": "primer",            "label": "Copy Format Instructions",   "args": ["-Mode", "primer"] }
+  ]
+}

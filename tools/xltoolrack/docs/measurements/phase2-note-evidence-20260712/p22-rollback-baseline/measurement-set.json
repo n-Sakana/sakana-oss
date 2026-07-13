@@ -1,0 +1,47 @@
+﻿{
+    "Label":  "p22-rollback-baseline",
+    "ExcelPid":  13376,
+    "StartedAt":  "2026-07-12T21:05:42.0504164+09:00",
+    "CompletedAt":  "2026-07-12T21:10:47.7899983+09:00",
+    "MeasurementSeconds":  90,
+    "SampleRateHz":  250,
+    "ActivitySource":  "controlled SendInput mouse-move only",
+    "RequiredValidWindows":  3,
+    "RequiredWaitOnsets":  30,
+    "AttemptCount":  3,
+    "ValidWindowCount":  3,
+    "TotalWaitOnsets":  359,
+    "Passed":  true,
+    "Attempts":  [
+                     {
+                         "Attempt":  1,
+                         "Valid":  true,
+                         "WaitOnsets":  141,
+                         "PumpSamples":  90,
+                         "Error":  null,
+                         "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-01",
+                         "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-01\\desktop-summary_20260712_210739.txt",
+                         "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-01\\controlled-activity.json"
+                     },
+                     {
+                         "Attempt":  2,
+                         "Valid":  true,
+                         "WaitOnsets":  112,
+                         "PumpSamples":  90,
+                         "Error":  null,
+                         "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-02",
+                         "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-02\\desktop-summary_20260712_210913.txt",
+                         "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-02\\controlled-activity.json"
+                     },
+                     {
+                         "Attempt":  3,
+                         "Valid":  true,
+                         "WaitOnsets":  106,
+                         "PumpSamples":  91,
+                         "Error":  null,
+                         "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-03",
+                         "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-03\\desktop-summary_20260712_211047.txt",
+                         "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p22-rollback-baseline\\attempt-03\\controlled-activity.json"
+                     }
+                 ]
+}

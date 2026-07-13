@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "buildId": "capture-native-v1",
+  "sourceSha256": "cfcb14595c68b1666b00717ee7a59caef8fed99f608244b9676f31ffff166845",
+  "assemblyVersion": "1.0.0.0",
+  "builtAtUtc": "2026-07-11T16:59:18.5142892Z",
+  "compiler": "C:\\WINDOWS\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"
+}

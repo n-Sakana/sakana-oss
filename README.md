@@ -9,6 +9,8 @@
 - `assets/slack-emoji/text-reactions-20260701-v2/` — Slack用の文字リアクション絵文字PNG一式とZIP
 - `tools/export-repo-text/` — リポジトリ構造とテキストファイル内容を単一テキストへ出力するPowerShellツール
 - `tools/prompt-pack/` — Office / PDF / テキスト資料を生成AIチャット用の単一テキストへ束ねるPowerShellツール
+- `tools/toolrack/` — Windows右クリックメニューから小型ツール群を起動するPowerShellツールラック
+- `tools/xltoolrack/` — Excelアドイン上でVBAツールを並行実行するxltoolrack
 - `vba/table-record-editor/` — Excelテーブルを上下分割フォームで閲覧・編集するVBA UserForm一式
 - `vba/onedrive-local-path/` — SharePoint / OneDrive URL をVBAでローカル同期パスへ変換する単一モジュール
 

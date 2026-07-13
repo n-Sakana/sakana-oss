@@ -1,0 +1,10 @@
+﻿{
+    "Attempt":  1,
+    "Valid":  true,
+    "WaitOnsets":  100,
+    "PumpSamples":  91,
+    "Error":  null,
+    "Directory":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-01",
+    "DesktopSummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-01\\desktop-summary_20260712_212552.txt",
+    "ActivitySummary":  "C:\\Users\\ynisi\\AppData\\Local\\Temp\\xltoolrack-phase2-evidence-20260712\\p23-subdir-pre-exclusion\\attempt-01\\controlled-activity.json"
+}

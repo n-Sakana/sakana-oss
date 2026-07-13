@@ -1,0 +1,37 @@
+これから作るプロジェクト一式を MD Mirror v1 形式で返してください。
+コードブロックで囲まず、形式外の説明文を付けないでください。
+Boundary は MDM- に続く32桁の大文字16進数を1つ決め、すべての境界行で同じ値を使ってください。
+Entry Count は実際の ENTRY 数と一致させてください。
+テキストファイルは Encoding: utf-8、EOL: crlf、Final Newline: yes としてください。
+新規生成なので Original Bytes、Original SHA-256、Restore Bytes、Restore SHA-256 はすべて - としてください。
+ファイル本文には行頭記号を追加しないでください。空フォルダは Kind: dir で表してください。
+
+先頭は次の順序です。
+# MD Mirror v1
+Boundary: MDM-00000000000000000000000000000000
+Source Name: project-name
+Source Type: generated
+Created At: -
+Entry Count: 実際の数
+
+===== INSTRUCTIONS Boundary値 =====
+
+===== END INSTRUCTIONS Boundary値 =====
+
+各テキストファイルは次の順序です。
+===== ENTRY 1 Boundary値 =====
+Path: src/main.ps1
+Kind: text
+Encoding: utf-8
+EOL: crlf
+Final Newline: yes
+Original Bytes: -
+Original SHA-256: -
+Restore Bytes: -
+Restore SHA-256: -
+===== TEXT Boundary値 =====
+ここにファイル本文
+===== END ENTRY 1 Boundary値 =====
+
+最後は次の行です。
+===== END MIRROR Boundary値 =====

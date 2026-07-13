@@ -1,0 +1,42 @@
+﻿xltoolrack live desktop measurement
+===================================
+Excel PID                 : 14080
+Measurement seconds       : 90
+Cursor target rate        : 250 Hz
+Cursor resolution (ms)   : 4.000
+Cursor effective rate    : 249.7 Hz
+Cursor gap P95 (ms)      : 4.159
+Cursor sampler priority   : High
+Tools started by script   : 
+Foreground PID start/end  : 14080 / 14080
+Excel foreground rate    : 100.00%
+Excel visible start/end   : True
+Cursor position changes   : 475
+Activity source           : controlled
+Pointer activity observed : True
+Active jobs start/end     : 7 / 7
+Expected active jobs      : 7
+Active job check passed   : True
+Pump samples              : 90
+Minimum pump samples      : 70
+Pump profile valid        : True
+Cursor measurement valid  : True
+Window valid              : True
+Fresh-result ticks        : 89
+Fresh records total/max   : 603 / 7
+Tick elapsed P50 (ms)     : 23.438
+Tick elapsed P95 (ms)     : 31.250
+Tick elapsed max (ms)     : 46.875
+Fresh tick P95 (ms)       : 31.250
+Aggregate read P95 (ms)   : 23.438
+PumpOnce P95 (ms)         : 31.250
+Dispatch P95 (ms)         : 15.625
+Error poll P95 (ms)       : 0.000
+Cleanup P95 (ms)          : 0.000
+Flush tools max/tick      : 0
+WAIT onset count          : 107
+WAIT duration P50 (ms)    : 4.013
+WAIT duration P95 (ms)    : 4.218
+WAIT duration max (ms)    : 8.035
+Pump profile              : C:\Users\ynisi\AppData\Local\Temp\xltoolrack-phase2-evidence-20260712\p23-subdir-pre-exclusion\attempt-02\pump-profile_20260712_212726.csv
+Cursor summary            : C:\Users\ynisi\AppData\Local\Temp\xltoolrack-phase2-evidence-20260712\p23-subdir-pre-exclusion\attempt-02\cursor-summary_20260712_212725.txt

@@ -1,0 +1,32 @@
+﻿xltoolrack cursor measurement summary
+=====================================
+Start (wall clock)        : 2026-07-12 21:25:55.822
+Duration requested        : 90 s
+Target sample rate        : 250 Hz
+Sampling resolution      : 4.000 ms
+Effective sample rate    : 249.7 Hz
+Sample gap P50/P95/max   : 3.999 / 4.159 / 48.016 ms
+Missed sample deadlines  : 28
+Sampler priority          : High (restored to Normal)
+Sampling checks passed   : True
+Samples (ok/failed)       : 22472 / 0
+CURSOR_SUPPRESSED samples : 0
+Cursor-hidden samples     : 0
+Cursor position changes  : 475
+Foreground start         : 0x2E0102 pid=14080 (nonzero=True)
+Foreground end           : 0x2E0102 pid=14080 (nonzero=True)
+Expected foreground PID  : 14080
+Expected foreground rate : 100.00%
+Foreground checks passed : True
+Validity checks passed    : True
+
+WAIT onset count          : 107
+WAIT total busy-ms       : 449.2
+WAIT busy-ms/s            : 4.99
+WAIT duration P50 (ms)    : 4.0
+WAIT duration P95 (ms)    : 4.2
+WAIT duration max (ms)    : 8.0
+APPSTARTING onset count   : 0
+
+Transition log            : C:\Users\ynisi\AppData\Local\Temp\xltoolrack-phase2-evidence-20260712\p23-subdir-pre-exclusion\attempt-02\cursor-transitions_20260712_212725.csv
+Per-second WAIT log       : C:\Users\ynisi\AppData\Local\Temp\xltoolrack-phase2-evidence-20260712\p23-subdir-pre-exclusion\attempt-02\cursor-persec_20260712_212725.csv

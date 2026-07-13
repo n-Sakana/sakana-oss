@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "timestamp",
+  "name": "Timestamp",
+  "on": ["file", "folder"],
+  "run": { "type": "powershell", "entry": "main.ps1", "window": "hidden" },
+  "variants": [
+    { "id": "date",     "label": "_yyyyMMdd",       "args": ["-Format", "yyyyMMdd"] },
+    { "id": "datetime", "label": "_yyyyMMddHHmmss", "args": ["-Format", "yyyyMMddHHmmss"] }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "vba-devkit",
+  "name": "VBA DevKit",
+  "on": ["file", "folder"],
+  "run": { "type": "powershell", "entry": "main.ps1" },
+  "variants": [
+    { "id": "analyze",          "label": "Analyze",               "args": ["-Mode", "analyze"] },
+    { "id": "analyze-settings", "label": "Analyze (settings...)", "args": ["-Mode", "analyze", "-Settings"] },
+    { "id": "extract",          "label": "Extract",               "args": ["-Mode", "extract"] },
+    { "id": "diff",             "label": "Diff...",               "args": ["-Mode", "diff"] },
+    { "id": "sanitize",         "label": "Sanitize",              "args": ["-Mode", "sanitize"] },
+    { "id": "unlock",           "label": "Unlock",                "args": ["-Mode", "unlock"] }
+  ]
+}

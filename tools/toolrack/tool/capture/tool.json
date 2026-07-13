@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "capture",
+  "name": "Capture",
+  "on": ["background"],
+  "run": {
+    "type": "powershell",
+    "entry": "main.ps1",
+    "window": "gui"
+  }
+}

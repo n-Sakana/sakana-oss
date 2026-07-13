@@ -1,0 +1,32 @@
+﻿xltoolrack cursor measurement summary
+=====================================
+Start (wall clock)        : 2026-07-12 20:31:40.022
+Duration requested        : 3 s
+Target sample rate        : 250 Hz
+Sampling resolution      : 4.000 ms
+Effective sample rate    : 249.9 Hz
+Sample gap P50/P95/max   : 4.000 / 4.006 / 5.496 ms
+Missed sample deadlines  : 0
+Sampler priority          : High (restored to Normal)
+Sampling checks passed   : True
+Samples (ok/failed)       : 750 / 0
+CURSOR_SUPPRESSED samples : 0
+Cursor-hidden samples     : 0
+Cursor position changes  : 0
+Foreground start         : 0x7092E pid=16048 (nonzero=True)
+Foreground end           : 0x7092E pid=16048 (nonzero=True)
+Expected foreground PID  : 0
+Expected foreground rate : 0.00%
+Foreground checks passed : True
+Validity checks passed    : True
+
+WAIT onset count          : 0
+WAIT total busy-ms       : 0.0
+WAIT busy-ms/s            : 0.00
+WAIT duration P50 (ms)    : 0.0
+WAIT duration P95 (ms)    : 0.0
+WAIT duration max (ms)    : 0.0
+APPSTARTING onset count   : 0
+
+Transition log            : C:\repos\_codex_work\xltoolrack-phase2-codex-20260712\docs\measurements\phase2-note-p21-smoke-final\cursor-transitions_20260712_203143.csv
+Per-second WAIT log       : C:\repos\_codex_work\xltoolrack-phase2-codex-20260712\docs\measurements\phase2-note-p21-smoke-final\cursor-persec_20260712_203143.csv

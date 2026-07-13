@@ -1,0 +1,16 @@
+﻿{
+    "ExcelPid":  14080,
+    "StartedAt":  "2026-07-12T21:23:57.0531762+09:00",
+    "EndedAt":  "2026-07-12T21:25:52.5805073+09:00",
+    "RequestedSeconds":  150,
+    "ElapsedSeconds":  115.5273311,
+    "IntervalMilliseconds":  180,
+    "Samples":  608,
+    "ForegroundSamples":  608,
+    "ForegroundFraction":  1,
+    "MovesSent":  608,
+    "ActivationAttempts":  0,
+    "ActivationSuccesses":  0,
+    "StoppedByFile":  true,
+    "InputMode":  "SendInput mouse-move only; no clicks or keys"
+}

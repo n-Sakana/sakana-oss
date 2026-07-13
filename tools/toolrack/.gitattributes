@@ -1,0 +1,18 @@
+*.cs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.psm1 text eol=lf
+*.txt text eol=lf
+*.vbs text eol=lf
+.gitignore text eol=lf
+
+*.bat text eol=crlf
+
+*.dll binary
+*.onnx binary
+*.part01 binary
+*.part02 binary
+*.wav binary
+*.xls binary
+*.xlsm binary

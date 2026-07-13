@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "keysend",
+  "name": "KeySend",
+  "on": ["background"],
+  "run": { "type": "powershell", "entry": "main.ps1" },
+  "variants": [
+    { "id": "default", "label": "Default",   "args": ["-Key", "0x07", "-Idle", "120", "-MaxRun", "0"] },
+    { "id": "custom",  "label": "Custom...", "args": [] }
+  ]
+}

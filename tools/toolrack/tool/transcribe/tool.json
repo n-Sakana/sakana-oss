@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "transcribe",
+  "name": "Transcribe",
+  "on": ["background"],
+  "run": {
+    "type": "powershell",
+    "entry": "main.ps1",
+    "window": "gui"
+  },
+  "variants": [
+    { "id": "start", "label": "Start (Japanese)", "args": [] }
+  ]
+}

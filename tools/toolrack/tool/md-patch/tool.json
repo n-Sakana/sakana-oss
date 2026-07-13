@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "md-patch",
+  "name": "MD Patch",
+  "on": ["folder", "background"],
+  "run": { "type": "powershell", "entry": "main.ps1" },
+  "variants": [
+    { "id": "apply-clipboard", "label": "Apply from Clipboard", "args": ["-Source", "clipboard"] },
+    { "id": "apply-file",      "label": "Apply from MD File",   "args": ["-Source", "file"] }
+  ]
+}

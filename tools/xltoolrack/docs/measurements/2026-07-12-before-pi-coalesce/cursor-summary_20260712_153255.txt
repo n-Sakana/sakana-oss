@@ -1,0 +1,22 @@
+xltoolrack cursor measurement summary
+=====================================
+Start (wall clock)        : 2026-07-12 15:31:25.724
+Duration requested        : 90 s
+Effective sample rate    : 64.0 Hz
+Samples (ok/failed)       : 5758 / 0
+CURSOR_SUPPRESSED samples : 0
+Cursor-hidden samples     : 363
+Foreground start         : 0x10810 (nonzero=True)
+Foreground end           : 0x10810 (nonzero=True)
+Validity checks passed    : True
+
+WAIT onset count          : 0
+WAIT total busy-ms       : 0.0
+WAIT busy-ms/s            : 0.00
+WAIT duration P50 (ms)    : 0.0
+WAIT duration P95 (ms)    : 0.0
+WAIT duration max (ms)    : 0.0
+APPSTARTING onset count   : 0
+
+Transition log            : C:\repos\pub\xltoolrack\docs\measurements\2026-07-12-before-pi-coalesce\cursor-transitions_20260712_153255.csv
+Per-second WAIT log       : C:\repos\pub\xltoolrack\docs\measurements\2026-07-12-before-pi-coalesce\cursor-persec_20260712_153255.csv

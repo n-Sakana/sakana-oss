@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "default_category": "general",
+  "categories": [
+    {
+      "id": "general",
+      "label": "Tool Rack",
+      "tools": [
+        "capture",
+        "keysend",
+        "timer",
+        "timestamp",
+        "transcribe",
+        "tree",
+        "vba-devkit"
+      ]
+    },
+    {
+      "id": "ai",
+      "label": "Tool Rack AI",
+      "tools": [
+        "clip",
+        "md-extract",
+        "md-mirror",
+        "md-patch"
+      ]
+    }
+  ]
+}

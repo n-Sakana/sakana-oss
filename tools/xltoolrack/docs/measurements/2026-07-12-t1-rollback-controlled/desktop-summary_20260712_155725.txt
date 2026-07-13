@@ -1,0 +1,20 @@
+xltoolrack live desktop measurement
+===================================
+Excel PID                 : 55020
+Measurement seconds       : 90
+Tools started by script   : 
+Foreground PID start/end  : 55020 / 55020
+Active jobs start/end     : 7 / 7
+Pump samples              : 39
+Minimum pump samples      : 18
+Pump profile valid        : True
+Fresh-result ticks        : 39
+Fresh records total/max   : 256 / 7
+Tick elapsed P50 (ms)     : 11.719
+Tick elapsed P95 (ms)     : 15.625
+Tick elapsed max (ms)     : 15.625
+Fresh tick P95 (ms)       : 15.625
+Aggregate read P95 (ms)   : 7.812
+Flush tools max/tick      : 0
+Pump profile              : C:\repos\pub\xltoolrack\docs\measurements\2026-07-12-t1-rollback-controlled\pump-profile_20260712_155725.csv
+Cursor summary            : C:\repos\pub\xltoolrack\docs\measurements\2026-07-12-t1-rollback-controlled\cursor-summary_20260712_155725.txt

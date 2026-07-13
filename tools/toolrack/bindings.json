@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "bindings": [
+    {
+      "id": "capture-mouse",
+      "trigger": { "type": "mouse", "button": "right", "modifiers": ["ctrl"] },
+      "invoke": { "tool": "capture", "action": "default" }
+    },
+    {
+      "id": "capture-hotkey",
+      "trigger": { "type": "hotkey", "key": "C", "modifiers": ["ctrl", "alt"] },
+      "invoke": { "tool": "capture", "action": "default" }
+    },
+    {
+      "id": "transcribe-hotkey",
+      "trigger": { "type": "hotkey", "key": "T", "modifiers": ["ctrl", "alt"] },
+      "invoke": { "tool": "transcribe", "action": "start" }
+    }
+  ]
+}
